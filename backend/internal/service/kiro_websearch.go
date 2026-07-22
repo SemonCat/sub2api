@@ -249,6 +249,15 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
 		}
 		iterationCachePlan.commit()
 		iterationCacheUsage := iterationCachePlan.result()
+		if ready != nil {
+			notifyReady(nil)
+			if _, err := io.Copy(w, &prelude); err != nil {
+				_ = resp.Body.Close()
+				return err
+			}
+			streamWriter = w
+			ready = nil
+		}
 		chunks, streamResult, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
 			requestCtx.UpstreamModel = upstreamModel
@@ -276,15 +285,6 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
 				currentToolUseID = analysis.WebSearchToolUseID
 			}
 			continue
-		}
-
-		if ready != nil {
-			notifyReady(nil)
-			if _, err := io.Copy(w, &prelude); err != nil {
-				return err
-			}
-			streamWriter = w
-			ready = nil
 		}
 
 		for _, chunk := range chunks {
