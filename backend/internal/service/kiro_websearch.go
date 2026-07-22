@@ -245,6 +245,12 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
 			return err
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			_ = resp.Body.Close()
+			if readErr != nil {
+				return readErr
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(responseBody))
 			return &kiroWebSearchHTTPError{Response: resp}
 		}
 		iterationCachePlan.commit()

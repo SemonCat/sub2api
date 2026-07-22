@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	kiropkg "github.com/Wei-Shaw/sub2api/internal/pkg/kiro"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -309,4 +311,87 @@ func TestOpenKiroAnthropicStreamResponseReturnsAfterFirstAcceptedWebSearchIterat
 			return false
 		}
 	}, time.Second, 10*time.Millisecond)
+}
+
+type kiroWebSearchContextBody struct {
+	ctx    context.Context
+	reader *bytes.Reader
+}
+
+func (b *kiroWebSearchContextBody) Read(p []byte) (int, error) {
+	select {
+	case <-b.ctx.Done():
+		return 0, b.ctx.Err()
+	default:
+		return b.reader.Read(p)
+	}
+}
+
+func (*kiroWebSearchContextBody) Close() error { return nil }
+
+type kiroWebSearchContextUpstream struct {
+	calls     int
+	errorBody *kiroWebSearchContextBody
+}
+
+func (*kiroWebSearchContextUpstream) Do(*http.Request, string, int64, int) (*http.Response, error) {
+	return nil, errors.New("unexpected non-TLS request")
+}
+
+func (u *kiroWebSearchContextUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	u.calls++
+	if u.calls == 1 {
+		return newJSONResponse(http.StatusOK, `{"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\"results\":[]}"}]}}`), nil
+	}
+	u.errorBody = &kiroWebSearchContextBody{
+		ctx:    req.Context(),
+		reader: bytes.NewReader([]byte(`{"message":"invalid request"}`)),
+	}
+	return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: u.errorBody}, nil
+}
+
+func TestOpenKiroAnthropicStreamResponsePreservesWebSearchHTTPErrorBodyAfterContextCancel(t *testing.T) {
+	body := kiroCacheRequestBody("error body ownership", false)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	payload["tools"] = []any{map[string]any{
+		"name":         "web_search",
+		"description":  "Search the web",
+		"input_schema": map[string]any{"type": "object"},
+	}}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	endpoint := kiropkg.BuildMcpEndpoint("us-east-1")
+	kiroWebSearchDescCache.Store(endpoint, "Search the web")
+	t.Cleanup(func() { kiroWebSearchDescCache.Delete(endpoint) })
+
+	upstream := &kiroWebSearchContextUpstream{}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          994,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "ksk_test", "api_region": "us-east-1"},
+	}
+
+	resp, _, openErr := svc.openKiroAnthropicStreamResponse(context.Background(), account, nil, body, "gpt-5.6-sol", "gpt-5.6-sol", nil, kiroCacheGroup(1))
+	require.NoError(t, openErr)
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.NotNil(t, upstream.errorBody)
+	select {
+	case <-upstream.errorBody.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("web-search worker did not release its stream context")
+	}
+	responseBody, readErr := io.ReadAll(resp.Body)
+	require.NoError(t, readErr)
+	require.JSONEq(t, `{"message":"invalid request"}`, string(responseBody))
+	require.NoError(t, resp.Body.Close())
 }
