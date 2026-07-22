@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -172,6 +173,29 @@ func addKiroStreamUsage(total *kiropkg.Usage, usage kiropkg.Usage) {
 func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, w io.Writer,
 ) error {
+	return s.streamKiroWebSearchAsAnthropicWithReady(ctx, account, group, anthropicBody, mappedModel, requestModel, token, headers, w, nil)
+}
+
+// streamKiroWebSearchAsAnthropicWithReady buffers the synthetic prelude until
+// the first model request is accepted. This lets compatibility adapters surface
+// account-failover errors before they commit an HTTP 200 response to the client.
+func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
+	ctx context.Context, account *Account, group *Group, anthropicBody []byte, mappedModel, requestModel, token string, headers http.Header, w io.Writer, ready func(error),
+) (retErr error) {
+	var readyOnce sync.Once
+	notifyReady := func(err error) {
+		if ready != nil {
+			readyOnce.Do(func() { ready(err) })
+		}
+	}
+	defer func() { notifyReady(retErr) }()
+
+	streamWriter := w
+	var prelude bytes.Buffer
+	if ready != nil {
+		streamWriter = &prelude
+	}
+
 	query := kiropkg.ExtractSearchQuery(anthropicBody)
 	if strings.TrimSpace(query) == "" {
 		return errKiroWebSearchFallback
@@ -189,7 +213,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 	// The actual first model request is built only after MCP results are injected.
 	// Defer all usage to the terminal delta so a speculative estimate cannot win
 	// over an authoritative zero-token cache hit in downstream SSE accounting.
-	if err := writeAnthropicMessageStart(w, "", requestModel, 0, nil); err != nil {
+	if err := writeAnthropicMessageStart(streamWriter, "", requestModel, 0, nil); err != nil {
 		return err
 	}
 
@@ -204,7 +228,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			results = nil
 		}
 
-		if err := writeSSEChunks(w, kiropkg.GenerateSearchIndicatorEvents(query, currentToolUseID, results, nextContentBlockIndex)); err != nil {
+		if err := writeSSEChunks(streamWriter, kiropkg.GenerateSearchIndicatorEvents(query, currentToolUseID, results, nextContentBlockIndex)); err != nil {
 			return err
 		}
 		nextContentBlockIndex += 2
@@ -225,6 +249,14 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		}
 		iterationCachePlan.commit()
 		iterationCacheUsage := iterationCachePlan.result()
+		if ready != nil {
+			notifyReady(nil)
+			if _, err := io.Copy(w, &prelude); err != nil {
+				return err
+			}
+			streamWriter = w
+			ready = nil
+		}
 
 		chunks, streamResult, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
@@ -240,7 +272,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 		analysis := kiropkg.AnalyzeBufferedStream(chunks)
 		if analysis.HasWebSearchToolUse && strings.TrimSpace(analysis.WebSearchQuery) != "" && iteration+1 < kiroMaxWebSearchIterations {
 			filtered := kiropkg.FilterChunksForClient(chunks, analysis.WebSearchToolUseIndex, nextContentBlockIndex)
-			if err := writeSSEChunks(w, filtered); err != nil {
+			if err := writeSSEChunks(streamWriter, filtered); err != nil {
 				return err
 			}
 			if maxIndex := kiropkg.MaxContentBlockIndex(filtered); maxIndex >= nextContentBlockIndex {
@@ -260,12 +292,12 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropic(
 			if !shouldForward {
 				continue
 			}
-			if _, err := w.Write(adjusted); err != nil {
+			if _, err := streamWriter.Write(adjusted); err != nil {
 				return err
 			}
 		}
 		streamResult.Usage = aggregateUsage
-		return writeAnthropicMessageCompletion(w, streamResult)
+		return writeAnthropicMessageCompletion(streamWriter, streamResult)
 	}
 
 	return fmt.Errorf("kiro web search exceeded max iterations")
