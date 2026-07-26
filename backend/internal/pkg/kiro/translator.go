@@ -260,6 +260,8 @@ func MapModel(model string) string {
 		return "gpt-5.6-terra"
 	case "gpt-5.6-luna":
 		return "gpt-5.6-luna"
+	case "claude-opus-5":
+		return "claude-opus-5"
 	case "claude-opus-4-8", "claude-opus-4-8-thinking", "claude-opus-4.8":
 		return "claude-opus-4.8"
 	case "claude-opus-4-7", "claude-opus-4-7-thinking", "claude-opus-4.7":
@@ -348,8 +350,9 @@ func normalizeModelAlias(model string) string {
 func kiroMaxOutputTokensForModel(model string) int {
 	normalized := normalizeModelAlias(model)
 	switch normalized {
-	// Opus 4.7 / 4.8 与 GPT-5.6 系列上限 128000。
-	case "claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7",
+	// Opus 5 官方规格为 128000 max output tokens；Opus 4.7/4.8 与 GPT-5.6 系列同为 128000。
+	case "claude-opus-5",
+		"claude-opus-4-8", "claude-opus-4.8", "claude-opus-4-7", "claude-opus-4.7",
 		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return 128000
 	default:

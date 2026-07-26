@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 17 // v17: include batch image/video pricing, Kiro endpoint/cache, group peak rate, and group web search per-call pricing
+const apiKeyAuthSnapshotVersion = 18 // v18: include Kiro endpoint/cache fields and group reasoning effort policy
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -424,6 +424,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			KiroStickySessionTTLSeconds:     groupForSnapshot.EffectiveKiroStickySessionTTLSeconds(),
 			KiroCacheEmulationRatio:         groupForSnapshot.EffectiveKiroCacheEmulationRatio(),
 			KiroEndpointMode:                groupForSnapshot.EffectiveKiroEndpointMode(),
+			MaxReasoningEffort:              groupForSnapshot.MaxReasoningEffort,
+			ReasoningEffortMappings:         groupForSnapshot.ReasoningEffortMappings,
 			PeakRateEnabled:                 groupForSnapshot.PeakRateEnabled,
 			PeakStart:                       groupForSnapshot.PeakStart,
 			PeakEnd:                         groupForSnapshot.PeakEnd,
@@ -513,6 +515,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			KiroStickySessionTTLSeconds:     snapshot.Group.KiroStickySessionTTLSeconds,
 			KiroCacheEmulationRatio:         snapshot.Group.KiroCacheEmulationRatio,
 			KiroEndpointMode:                snapshot.Group.KiroEndpointMode,
+			MaxReasoningEffort:              snapshot.Group.MaxReasoningEffort,
+			ReasoningEffortMappings:         snapshot.Group.ReasoningEffortMappings,
 			PeakRateEnabled:                 snapshot.Group.PeakRateEnabled,
 			PeakStart:                       snapshot.Group.PeakStart,
 			PeakEnd:                         snapshot.Group.PeakEnd,

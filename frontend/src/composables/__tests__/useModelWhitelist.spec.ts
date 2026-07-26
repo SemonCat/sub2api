@@ -105,6 +105,7 @@ describe('useModelWhitelist', () => {
 
     expect(models).toContain('claude-sonnet-4-6')
     expect(models).toContain('claude-sonnet-4-6-thinking')
+    expect(models).toContain('claude-opus-5')
     expect(models).toContain('claude-opus-4-8')
     expect(models).toContain('claude-opus-4-8-thinking')
     expect(models).not.toContain('claude-sonnet-4-6-chat')
@@ -118,6 +119,7 @@ describe('useModelWhitelist', () => {
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
+      'claude-opus-5',
       'claude-opus-4-8',
       'claude-opus-4-8-thinking',
       'claude-opus-4-7',
@@ -200,6 +202,7 @@ describe('useModelWhitelist', () => {
       { from: 'gpt-5.6-sol', to: 'gpt-5.6-sol' },
       { from: 'gpt-5.6-terra', to: 'gpt-5.6-terra' },
       { from: 'gpt-5.6-luna', to: 'gpt-5.6-luna' },
+      { from: 'claude-opus-5', to: 'claude-opus-5' },
       { from: 'claude-opus-4-8', to: 'claude-opus-4.8' },
       { from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8' },
       { from: 'claude-opus-4-7', to: 'claude-opus-4.7' },
@@ -245,6 +248,7 @@ describe('useModelWhitelist', () => {
       { from: 'gpt-5.6-sol', to: 'gpt-5.6-sol' },
       { from: 'gpt-5.6-terra', to: 'gpt-5.6-terra' },
       { from: 'gpt-5.6-luna', to: 'gpt-5.6-luna' },
+      { from: 'claude-opus-5', to: 'claude-opus-5' },
       { from: 'claude-opus-4-8', to: 'claude-opus-4.8' },
       { from: 'claude-opus-4-8-thinking', to: 'claude-opus-4.8' },
       { from: 'claude-opus-4-7', to: 'claude-opus-4.7' },
@@ -262,7 +266,7 @@ describe('useModelWhitelist', () => {
       { from: 'claude-haiku-4-5-20251001', to: 'claude-haiku-4.5' },
       { from: 'claude-haiku-4-5-20251001-thinking', to: 'claude-haiku-4.5' }
     ]))
-    expect(mappings).toHaveLength(19)
+    expect(mappings).toHaveLength(20)
     expect(mappings.every(item => !item.from.startsWith('kiro-'))).toBe(true)
     expect(mappings.every(item => !item.to.startsWith('kiro-'))).toBe(true)
     expect(mappings.every(item => !item.from.endsWith('-agentic'))).toBe(true)

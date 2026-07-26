@@ -338,6 +338,7 @@ func newKiroFailbackHandler(t *testing.T, statusByAccount map[int64]int) (*Gatew
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	concurrencyService := service.NewConcurrencyService(&kiroFailbackConcurrencyCache{})
 	handler := NewGatewayHandler(

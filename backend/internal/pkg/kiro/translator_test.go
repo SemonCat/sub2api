@@ -3092,6 +3092,7 @@ func TestMapModel_MatchesKiroReferenceMapping(t *testing.T) {
 		"gpt-5.6-sol":                         "gpt-5.6-sol",
 		"gpt-5.6-terra":                       "gpt-5.6-terra",
 		"gpt-5.6-luna":                        "gpt-5.6-luna",
+		"claude-opus-5":                       "claude-opus-5",
 		"claude-opus-4-8":                     "claude-opus-4.8",
 		"claude-opus-4-8-thinking":            "claude-opus-4.8",
 		"claude-opus-4.8":                     "claude-opus-4.8",
@@ -3160,6 +3161,12 @@ func TestIsOutputConfigPathModelSupportsFutureVersions(t *testing.T) {
 	for modelID, want := range cases {
 		require.Equal(t, want, isOutputConfigPathModel(modelID), modelID)
 	}
+}
+
+func TestKiroMaxOutputTokensForOpus5MatchesOfficialSpec(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 128000, kiroMaxOutputTokensForModel("claude-opus-5"))
 }
 
 func TestMapModel_ReturnsEmptyForUnsupportedModels(t *testing.T) {
