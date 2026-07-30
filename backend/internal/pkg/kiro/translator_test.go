@@ -704,6 +704,21 @@ func TestParseNonStreamingEventStreamFallsBackToEstimatedInputTokens(t *testing.
 	require.Equal(t, 207, withCache.Usage.InputTokens)
 	require.Equal(t, int64(207), gjson.GetBytes(withCache.ResponseBody, "usage.input_tokens").Int())
 	require.Equal(t, int64(1755), gjson.GetBytes(withCache.ResponseBody, "usage.cache_creation_input_tokens").Int())
+
+	// A full cache hit legitimately has zero uncached input tokens. The estimated
+	// fallback must not turn that zero back into the full prompt size, otherwise
+	// input_tokens + cache_read_input_tokens double-counts the same prompt.
+	fullCacheHit, err := ParseNonStreamingEventStreamWithContext(newStream(), "gpt-5.6-sol", KiroRequestContext{
+		EstimatedInputTokens: 1962,
+		CacheEmulationUsage: &Usage{
+			InputTokens:          0,
+			CacheReadInputTokens: 1962,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, fullCacheHit.Usage.InputTokens)
+	require.Equal(t, int64(0), gjson.GetBytes(fullCacheHit.ResponseBody, "usage.input_tokens").Int())
+	require.Equal(t, int64(1962), gjson.GetBytes(fullCacheHit.ResponseBody, "usage.cache_read_input_tokens").Int())
 }
 
 func TestParseNonStreamingEventStreamRejectsTrailingJSONValueInToolInput(t *testing.T) {

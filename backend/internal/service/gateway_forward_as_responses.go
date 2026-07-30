@@ -124,6 +124,10 @@ func (s *GatewayService) ForwardAsResponses(
 		cachePlan := s.prepareKiroResponsesCacheEmulationUsage(ctx, account, group, body, mappedModel, estimateKiroInputTokens(ctx, anthropicBody))
 		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, parsed, anthropicBody, mappedModel, originalModel, c.Request.Header, group, cachePlan)
 		if err != nil {
+			var failoverErr *UpstreamFailoverError
+			if errors.As(err, &failoverErr) {
+				return nil, err
+			}
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			setOpsUpstreamError(c, 0, safeErr, "")
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -674,8 +678,11 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 }
 
 // appendRawJSON appends a JSON fragment string to existing raw JSON.
+// Anthropic announces tool_use blocks with input={} before streaming the real
+// input_json_delta payload. Treat that empty object as a placeholder rather
+// than a fragment, otherwise buffered Responses requests produce {}{"key":...}.
 func appendRawJSON(existing json.RawMessage, fragment string) json.RawMessage {
-	if len(existing) == 0 {
+	if len(existing) == 0 || strings.TrimSpace(string(existing)) == "{}" {
 		return json.RawMessage(fragment)
 	}
 	return json.RawMessage(string(existing) + fragment)
