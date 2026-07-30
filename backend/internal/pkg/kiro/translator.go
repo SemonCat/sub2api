@@ -41,7 +41,8 @@ const (
 )
 
 // kiroUpstreamTraceEnabled 由环境变量 KIRO_UPSTREAM_TRACE=1 开启，仅用于诊断：
-// 打印 Kiro 上游原始事件类型与语义事件类型/内容前缀，定位 CoT 泄漏来自哪个通道。
+// 打印 Kiro 上游原始事件类型、语义事件类型和负载大小。不要记录正文或 reasoning
+// 内容，避免用户提示词、工具参数和模型推理进入集中式日志。
 var kiroUpstreamTraceEnabled = os.Getenv("KIRO_UPSTREAM_TRACE") == "1"
 
 const (
@@ -541,10 +542,10 @@ func ParseNonStreamingEventStreamWithContext(body io.Reader, model string, reque
 		usage = mergeKiroCacheEmulationUsage(usage, requestCtx.CacheEmulationUsage)
 	}
 	// Kiro 不上报 tokenUsage,解析结果的 InputTokens 恒为 0；缓存模拟生效时会
-	// 顺带填上（inputTokens 减去缓存部分），未生效时用调用方预估值兜底,
-	// 避免响应体 usage.input_tokens 输出 0。放在 merge 之后,让缓存模拟的
-	// 更精确取值优先。
-	if usage.InputTokens == 0 && requestCtx.EstimatedInputTokens > 0 {
+	// 顺带填上（inputTokens 减去缓存部分）。只有未生成缓存模拟结果时才使用
+	// 调用方预估值兜底；完整缓存命中的 InputTokens 合法地为 0，不能再填回
+	// 整个预估提示词，否则会和 cache_read_input_tokens 重复计数。
+	if requestCtx.CacheEmulationUsage == nil && usage.InputTokens == 0 && requestCtx.EstimatedInputTokens > 0 {
 		usage.InputTokens = requestCtx.EstimatedInputTokens
 	}
 	return &ParseResult{
@@ -1250,26 +1251,26 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		}
 
 		if kiroUpstreamTraceEnabled {
-			payloadPrefix := string(msg.Payload)
-			if len(payloadPrefix) > 300 {
-				payloadPrefix = payloadPrefix[:300]
-			}
-			fmt.Fprintf(os.Stderr, "[KIRO_TRACE] model=%s thinkingEnabled=%v eventType=%q payload=%s\n",
-				model, requestCtx.ThinkingEnabled, msg.EventType, payloadPrefix)
+			fmt.Fprintf(os.Stderr, "[KIRO_TRACE] model=%s thinkingEnabled=%v eventType=%q payloadBytes=%d\n",
+				model, requestCtx.ThinkingEnabled, msg.EventType, len(msg.Payload))
 		}
 
 		semanticEvents := extractSemanticEvents(msg.EventType, event, &lastContentFragment)
 		for i := range semanticEvents {
 			if kiroUpstreamTraceEnabled {
 				ev := &semanticEvents[i]
-				detail := ev.Content
-				if detail == "" {
-					detail = ev.Reasoning
+				detailBytes := len(ev.Content)
+				if detailBytes == 0 {
+					detailBytes = len(ev.Reasoning)
 				}
-				if len(detail) > 200 {
-					detail = detail[:200]
-				}
-				fmt.Fprintf(os.Stderr, "[KIRO_TRACE]   -> semanticType=%q detail=%q\n", ev.Type, detail)
+				fmt.Fprintf(
+					os.Stderr,
+					"[KIRO_TRACE]   -> semanticType=%q detailBytes=%d hasContent=%v hasReasoning=%v\n",
+					ev.Type,
+					detailBytes,
+					ev.Content != "",
+					ev.Reasoning != "",
+				)
 			}
 			if err := applySemanticEvent(&semanticEvents[i]); err != nil {
 				return nil, err
