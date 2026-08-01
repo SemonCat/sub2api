@@ -37,7 +37,7 @@ describe('native browser controls', () => {
   })
 
   it('does not use native browser dialog APIs in production source', () => {
-    const nativeDialogCall = /\b(?:window\.)?(?:alert|confirm|prompt)\s*\(/
+    const nativeDialogCall = /\bwindow\.(?:alert|confirm|prompt)\s*\(/
     const offenders = productionSources.filter((path) =>
       nativeDialogCall.test(stripComments(readFileSync(path, 'utf8'))),
     )

@@ -51,6 +51,18 @@ const PaginationStub = defineComponent({
   template: '<div class="pagination-stub" />',
 })
 
+const ConfirmDialogStub = defineComponent({
+  name: 'ConfirmDialog',
+  props: {
+    show: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  emits: ['confirm', 'cancel'],
+  template: '<button v-if="show" data-test="confirm-dialog" @click="$emit(\'confirm\')" />',
+})
+
 const runtimeConfig = {
   level: 'info',
   enable_sampling: false,
@@ -73,7 +85,6 @@ const sinkHealth = {
 describe('OpsSystemLogTable host support', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     mockListSystemLogs.mockResolvedValue({
       items: [
         {
@@ -100,6 +111,7 @@ describe('OpsSystemLogTable host support', () => {
         stubs: {
           Select: SelectStub,
           Pagination: PaginationStub,
+          ConfirmDialog: ConfirmDialogStub,
         },
       },
     })
@@ -121,6 +133,7 @@ describe('OpsSystemLogTable host support', () => {
     const cleanupButton = wrapper.findAll('button').find((button) => button.text() === 'admin.ops.systemLogs.cleanCurrentFilters')
     expect(cleanupButton).toBeDefined()
     await cleanupButton!.trigger('click')
+    await wrapper.get('[data-test="confirm-dialog"]').trigger('click')
     await flushPromises()
 
     expect(mockCleanupSystemLogs).toHaveBeenCalledWith(expect.objectContaining({ host: 'api-node-2' }))
