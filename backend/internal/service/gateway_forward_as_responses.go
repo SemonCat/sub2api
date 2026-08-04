@@ -481,6 +481,23 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	responsesResp := apicompat.AnthropicToResponsesResponseWithCustomTools(finalResp, clientToolMapping.CustomTools)
 	responsesResp.Model = originalModel // Use original model name
 
+	if responsesResp.Status == "completed" && len(responsesResp.Output) == 0 && usage.OutputTokens == 0 {
+		logger.L().Warn("forward_as_responses buffered: upstream completed without output",
+			zap.String("request_id", requestID),
+			zap.String("model", originalModel),
+		)
+		writeResponsesError(c, http.StatusBadGateway, "upstream_empty_response", "Upstream completed without output")
+		return &ForwardResult{
+			RequestID:       requestID,
+			Usage:           usage,
+			Model:           originalModel,
+			UpstreamModel:   mappedModel,
+			ReasoningEffort: reasoningEffort,
+			Stream:          false,
+			Duration:        time.Since(startTime),
+		}, nil
+	}
+
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
