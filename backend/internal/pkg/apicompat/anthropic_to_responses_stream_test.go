@@ -139,6 +139,47 @@ func TestAnthropicEventToResponses_CompletedCarriesOutput(t *testing.T) {
 	}
 }
 
+func TestAnthropicEventToResponses_EmptyCompletedBecomesFailed(t *testing.T) {
+	state := NewAnthropicEventToResponsesState()
+	state.Model = "gpt-5.6-sol"
+
+	var events []ResponsesStreamEvent
+	feed := func(evt *AnthropicStreamEvent) {
+		events = append(events, AnthropicEventToResponsesEvents(evt, state)...)
+	}
+
+	feed(&AnthropicStreamEvent{
+		Type: "message_start",
+		Message: &AnthropicResponse{
+			ID:    "msg_empty",
+			Model: "gpt-5.6-sol",
+			Usage: AnthropicUsage{InputTokens: 21},
+		},
+	})
+	feed(&AnthropicStreamEvent{
+		Type:  "message_delta",
+		Delta: &AnthropicDelta{StopReason: "end_turn"},
+		Usage: &AnthropicUsage{OutputTokens: 0},
+	})
+	feed(&AnthropicStreamEvent{Type: "message_stop"})
+
+	var terminal *ResponsesStreamEvent
+	for i := range events {
+		if events[i].Type == "response.failed" || events[i].Type == "response.completed" {
+			terminal = &events[i]
+		}
+	}
+	if terminal == nil || terminal.Response == nil {
+		t.Fatalf("terminal response event was not emitted: %+v", events)
+	}
+	if terminal.Type != "response.failed" || terminal.Response.Status != "failed" {
+		t.Fatalf("terminal event = %+v, want response.failed", terminal)
+	}
+	if terminal.Response.Error == nil || terminal.Response.Error.Code != "upstream_empty_response" {
+		t.Fatalf("terminal error = %+v, want upstream_empty_response", terminal.Response.Error)
+	}
+}
+
 // TestAnthropicEventToResponses_ToolCallCompletedCarriesArguments pins that a
 // function call's accumulated arguments survive into output_item.done and
 // response.completed.
