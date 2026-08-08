@@ -26,8 +26,8 @@ type kiroWebSearchTestUpstream struct {
 
 type kiroWebSearchTestCooldownStore struct{}
 
-func (*kiroWebSearchTestCooldownStore) ReserveRequest(context.Context, string) (time.Duration, error) {
-	return 0, nil
+func (*kiroWebSearchTestCooldownStore) CheckCooldown(context.Context, string) error {
+	return nil
 }
 
 func (*kiroWebSearchTestCooldownStore) MarkSuccess(context.Context, string) error {
