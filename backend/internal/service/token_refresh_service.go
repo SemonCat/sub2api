@@ -1206,6 +1206,10 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 	s.ensureAntigravityPrivacy(ctx, account)
 	// Kiro OAuth: 刷新成功后，提前解析并回填 profileArn（Enterprise/IdC 账号需要）
 	s.ensureKiroProfileArn(ctx, account)
+	// Grok: clear soft reauth flag after a successful credential refresh.
+	if account != nil && account.Platform == PlatformGrok && accountGrokNeedsReauth(account) {
+		clearGrokNeedsReauthExtra(ctx, s.accountRepo, account.ID)
+	}
 }
 
 func (s *TokenRefreshService) postRefreshStateSyncWithCleanup(parent context.Context, account *Account) {

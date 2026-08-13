@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
 const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
@@ -360,6 +360,7 @@ describe('EditAccountModal', () => {
 
     expect(wrapper.find('input[type="password"][placeholder="ksk_..."]').exists()).toBe(true)
     expect(wrapper.find('input[placeholder="https://your-relay.example.com"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="edit-kiro-api-region-select"]').exists()).toBe(true)
   })
 
   it('keeps the relay API-key placeholder when a Kiro base_url is present', () => {
@@ -367,6 +368,59 @@ describe('EditAccountModal', () => {
 
     expect(wrapper.find('input[type="password"][placeholder="sk-..."]').exists()).toBe(true)
     expect(wrapper.find('input[placeholder="https://your-relay.example.com"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="edit-kiro-api-region-select"]').exists()).toBe(false)
+  })
+
+  it('loads and submits Kiro direct API-key API region', async () => {
+    const account = buildKiroAPIKeyAccount()
+    account.credentials.api_region = 'eu-central-1'
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const regionSelect = wrapper.get<HTMLSelectElement>('[data-testid="edit-kiro-api-region-select"]')
+    expect(regionSelect.element.value).toBe('eu-central-1')
+    expect(regionSelect.find('option[value="eu-central-1"]').exists()).toBe(true)
+    expect(regionSelect.find('option[value="eu-central-1"]').text()).toBe('eu-central-1')
+
+    await regionSelect.setValue('eu-west-1')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials?.api_region).toBe('eu-west-1')
+  })
+
+  it('ignores SSO region when rehydrating the Kiro direct API-key API region', () => {
+    const account = buildKiroAPIKeyAccount()
+    account.credentials.region = 'eu-central-1'
+
+    const wrapper = mountModal(account)
+
+    // region 是 Identity Center 区域,不得作为推理区域回退。
+    expect((wrapper.get('[data-testid="edit-kiro-api-region-select"]').element as HTMLSelectElement).value)
+      .toBe('us-east-1')
+  })
+
+  it('hides the API region field for Kiro OAuth accounts and never promotes their SSO region', async () => {
+    const account = buildKiroOAuthAccount()
+    account.credentials.region = 'eu-central-1'
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="edit-kiro-api-region-select"]').exists()).toBe(false)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(credentials).not.toHaveProperty('api_region')
+    expect(credentials?.region).toBe('eu-central-1')
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {

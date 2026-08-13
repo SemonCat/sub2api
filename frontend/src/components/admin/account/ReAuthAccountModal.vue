@@ -19,11 +19,9 @@
                     ? 'from-amber-500 to-amber-600'
                     : isAntigravity
                       ? 'from-purple-500 to-purple-600'
-                  : isAntigravity
-                    ? 'from-purple-500 to-purple-600'
-                    : isGrok
-                      ? 'from-zinc-700 to-zinc-900'
-                      : 'from-orange-500 to-orange-600'
+                      : isGrok
+                        ? 'from-zinc-700 to-zinc-900'
+                        : 'from-orange-500 to-orange-600'
             ]"
           >
             <Icon name="sparkles" size="md" class="text-white" />
@@ -40,11 +38,9 @@
                       ? t('admin.accounts.kiroAccount')
                       : isAntigravity
                         ? t('admin.accounts.antigravityAccount')
-                    : isAntigravity
-                      ? t('admin.accounts.antigravityAccount')
-                      : isGrok
-                        ? t('admin.accounts.grokAccount')
-                        : t('admin.accounts.claudeCodeAccount')
+                        : isGrok
+                          ? t('admin.accounts.grokAccount')
+                          : t('admin.accounts.claudeCodeAccount')
               }}
             </span>
           </div>
@@ -288,11 +284,14 @@
           </div>
           <div>
             <label class="input-label">{{ t('admin.accounts.oauth.kiro.regionLabel') }}</label>
-            <input
+            <Select
               v-model="kiroIDCRegion"
-              type="text"
-              class="input"
+              :options="KIRO_REGION_SELECT_OPTIONS"
+              searchable
+              creatable
+              creatable-label-mode="raw"
               :placeholder="t('admin.accounts.oauth.kiro.regionPlaceholder')"
+              data-testid="reauth-kiro-idc-region-select"
             />
           </div>
         </div>
@@ -353,14 +352,20 @@
         :show-help="isAnthropic"
         :show-proxy-warning="isAnthropic"
         :show-cookie-option="isAnthropic"
+        :show-refresh-token-option="isOpenAI || isAntigravity || isGrok"
+        :show-sso-option="isGrok"
+        :show-email-password-option="false"
         :allow-multiple="false"
         :method-label="t('admin.accounts.inputMethod')"
         :platform="oauthPlatform"
         :show-project-id="isGemini && geminiOAuthType === 'code_assist'"
         :is-kiro-external-idp="isKiro && kiroAccountType === 'external_idp'"
         :external-idp-stage="kiroOAuth.externalIdpStage.value"
+        :initial-input-method="grokInitialInputMethod"
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
+        @validate-refresh-token="handleGrokValidateRefreshToken"
+        @import-sso="handleGrokImportSSO"
       />
     </div>
 
@@ -423,6 +428,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import OAuthAuthorizationFlow from '@/components/account/OAuthAuthorizationFlow.vue'
 import { useAntigravityOAuth } from '@/composables/useAntigravityOAuth'
@@ -437,6 +443,7 @@ import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import { useAppStore } from '@/stores/app'
 import type { Account, AccountPlatform } from '@/types'
 import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import { KIRO_REGION_SELECT_OPTIONS } from '@/constants/kiroRegions'
 
 interface OAuthFlowExposed {
   authCode: string
@@ -502,16 +509,33 @@ const isGemini = computed(() => props.account?.platform === 'gemini')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
 const isAntigravity = computed(() => props.account?.platform === 'antigravity')
 const isKiro = computed(() => props.account?.platform === 'kiro')
+const isGrok = computed(() => props.account?.platform === 'grok')
 
 const oauthPlatform = computed<AccountPlatform>(() => {
   if (isOpenAI.value) return 'openai'
   if (isGemini.value) return 'gemini'
   if (isKiro.value) return 'kiro'
   if (isAntigravity.value) return 'antigravity'
+  if (isGrok.value) return 'grok'
   return 'anthropic'
 })
-const isGrok = computed(() => props.account?.platform === 'grok')
 
+/**
+ * Grok reauth default tab (password auth is hidden):
+ * - refresh_token when RT may still work
+ * - SSO cookie otherwise
+ */
+const grokInitialInputMethod = computed<AuthInputMethod>(() => {
+  if (!isGrok.value) return 'manual'
+  const creds = (props.account?.credentials || {}) as Record<string, unknown>
+  const hasRT =
+    (typeof creds.refresh_token === 'string' && creds.refresh_token.trim() !== '') ||
+    (typeof creds.has_refresh_token === 'boolean' && creds.has_refresh_token)
+  if (hasRT) return 'refresh_token'
+  return 'sso_cookie'
+})
+
+// Computed - current OAuth state based on platform
 const currentAuthUrl = computed(() => {
   if (isOpenAILike.value) return openaiOAuth.authUrl.value
   if (isGemini.value) return geminiOAuth.authUrl.value
@@ -550,9 +574,21 @@ const currentError = computed(() => {
 
 const isKiroImportMode = computed(() => isKiro.value && kiroAccountType.value === 'import')
 
+// Computed — footer "complete auth" only for code-exchange flows, not SSO/password/RT.
 const isManualInputMethod = computed(() => {
-  // These providers always use manual input (no cookie auth option).
-  return isOpenAILike.value || isGemini.value || isKiro.value || isAntigravity.value || isGrok.value || oauthFlowRef.value?.inputMethod === 'manual'
+  const method = oauthFlowRef.value?.inputMethod
+  if (method === 'sso_cookie' || method === 'email_password' || method === 'refresh_token') {
+    return false
+  }
+  // OpenAI/Gemini/Kiro/Antigravity/Grok use manual code paste by default (no cookie auth)
+  return (
+    isOpenAILike.value ||
+    isGemini.value ||
+    isKiro.value ||
+    isAntigravity.value ||
+    isGrok.value ||
+    method === 'manual'
+  )
 })
 
 const canExchangeCode = computed(() => {
@@ -1007,6 +1043,81 @@ const handleCookieAuth = async (sessionKey: string) => {
     claudeOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.cookieAuthFailed')
   } finally {
     claudeOAuth.loading.value = false
+  }
+}
+
+/** Apply Grok Build OAuth tokens onto the existing account (never store password/SSO). */
+const applyGrokReauthTokenInfo = async (tokenInfo: {
+  access_token?: string
+  refresh_token?: string
+  email?: string
+  [key: string]: unknown
+}) => {
+  if (!props.account) return
+  const credentials = grokOAuth.buildCredentials(tokenInfo as any)
+  const extra = grokOAuth.buildExtraInfo(tokenInfo as any)
+  const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+    type: 'oauth',
+    credentials,
+    extra
+  })
+  appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+  emit('reauthorized', updatedAccount)
+  handleClose()
+}
+
+/** Re-auth with a single SSO cookie → Build OAuth (not batch create). */
+const handleGrokImportSSO = async (ssoInput: string) => {
+  if (!props.account || !isGrok.value) return
+  const ssoToken = ssoInput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)[0]
+  if (!ssoToken) return
+
+  grokOAuth.loading.value = true
+  grokOAuth.error.value = ''
+  try {
+    const tokenInfo = await grokOAuth.validateSSOToken(ssoToken, props.account.proxy_id)
+    if (!tokenInfo) return
+    await applyGrokReauthTokenInfo(tokenInfo)
+  } catch (error: any) {
+    grokOAuth.error.value =
+      error.response?.data?.detail ||
+      error.message ||
+      t('admin.accounts.oauth.grok.failedToValidateSSO', 'Failed to validate Grok SSO')
+    appStore.showError(grokOAuth.error.value)
+  } finally {
+    grokOAuth.loading.value = false
+  }
+}
+
+/** Re-auth with a single refresh token. */
+const handleGrokValidateRefreshToken = async (refreshTokenInput: string) => {
+  if (!props.account || !isGrok.value) return
+  const refreshToken = refreshTokenInput
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)[0]
+  if (!refreshToken) {
+    grokOAuth.error.value = t('admin.accounts.oauth.grok.pleaseEnterRefreshToken')
+    return
+  }
+
+  grokOAuth.loading.value = true
+  grokOAuth.error.value = ''
+  try {
+    const tokenInfo = await grokOAuth.validateRefreshToken(refreshToken, props.account.proxy_id)
+    if (!tokenInfo) return
+    await applyGrokReauthTokenInfo(tokenInfo)
+  } catch (error: any) {
+    grokOAuth.error.value =
+      error.response?.data?.detail ||
+      error.message ||
+      t('admin.accounts.oauth.grok.failedToValidateRT')
+    appStore.showError(grokOAuth.error.value)
+  } finally {
+    grokOAuth.loading.value = false
   }
 }
 </script>

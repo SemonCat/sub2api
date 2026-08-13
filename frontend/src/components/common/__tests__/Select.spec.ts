@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { DOMWrapper, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 
@@ -111,5 +111,57 @@ describe('Select dropdown viewport constraints', () => {
     expect(dropdown?.style.left).toBe('312px')
     expect(dropdown?.style.minWidth).toBe('0px')
     expect(dropdown?.style.maxWidth).toBe('0px')
+  })
+})
+
+describe('Select creatable labels', () => {
+  it('shows the raw search query as the first creatable option when requested', async () => {
+    const wrapper = mount(Select, {
+      props: {
+        modelValue: null,
+        options: [{ value: 'us-east-1', label: 'us-east-1' }],
+        searchable: true,
+        creatable: true,
+        creatableLabelMode: 'raw',
+      },
+    })
+    unmountWrapper = () => wrapper.unmount()
+
+    await wrapper.get('button').trigger('click')
+    await nextTick()
+
+    const searchInput = document.body.querySelector<HTMLInputElement>('.select-search-input')
+    expect(searchInput).not.toBeNull()
+    await new DOMWrapper(searchInput!).setValue('eu-central-1')
+    await nextTick()
+
+    const options = Array.from(document.body.querySelectorAll<HTMLElement>('.select-option'))
+    expect(options[0]?.textContent?.trim()).toBe('eu-central-1')
+
+    await new DOMWrapper(options[0]!).trigger('click')
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['eu-central-1'])
+  })
+
+  it('keeps the prefixed creatable label by default', async () => {
+    const wrapper = mount(Select, {
+      props: {
+        modelValue: null,
+        options: [{ value: 'us-east-1', label: 'us-east-1' }],
+        searchable: true,
+        creatable: true,
+      },
+    })
+    unmountWrapper = () => wrapper.unmount()
+
+    await wrapper.get('button').trigger('click')
+    await nextTick()
+
+    const searchInput = document.body.querySelector<HTMLInputElement>('.select-search-input')
+    expect(searchInput).not.toBeNull()
+    await new DOMWrapper(searchInput!).setValue('eu-central-1')
+    await nextTick()
+
+    const option = document.body.querySelector<HTMLElement>('.select-option')
+    expect(option?.textContent?.trim()).toBe('common.search "eu-central-1"')
   })
 })

@@ -172,6 +172,39 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 				Content: blockJSON,
 			})
 
+		case IsCompactionItemType(item.Type):
+			// Codex remote compaction v2 回放：上一轮的压缩结果被原样放回 input，
+			// 代表被丢弃的全部前文。必须还原成 user message——若落到 default 分支
+			// 会因 Content==nil 被丢弃，压缩"成功"后前文就全没了。
+			// 注意不能转成 reasoning：本网关合成的 encrypted_content 是自造信封，
+			// Anthropic 摄入不了（理由同下方 reasoning 分支）。
+			summary := CompactionSummaryFromItem(&item)
+			if summary == "" {
+				continue
+			}
+			text, err := json.Marshal(WrapCompactionSummaryForReplay(summary))
+			if err != nil {
+				return nil, nil, fmt.Errorf("marshal compaction summary: %w", err)
+			}
+			messages = append(messages, AnthropicMessage{
+				Role:    "user",
+				Content: text,
+			})
+
+		case strings.TrimSpace(item.Type) == CompactionTriggerType:
+			// 压缩触发器：Anthropic 协议族没有原生 compact 端点，只能把它降级成
+			// 一次普通轮次 + 摘要指令。同样必须显式处理，否则被 default 分支静默
+			// 丢弃，上游会当成普通对话继续干活（Codex 随后报 "expected exactly one
+			// compaction output item"）。
+			prompt, err := json.Marshal(CompactionSummaryPrompt)
+			if err != nil {
+				return nil, nil, fmt.Errorf("marshal compaction prompt: %w", err)
+			}
+			messages = append(messages, AnthropicMessage{
+				Role:    "user",
+				Content: prompt,
+			})
+
 		case item.Type == "reasoning":
 			// Anthropic 无法摄入 OpenAI 的 reasoning：encrypted_content 是不透明的，
 			// 而 thinking 块的重放需要 Anthropic 自己签发的 signature，无法伪造。

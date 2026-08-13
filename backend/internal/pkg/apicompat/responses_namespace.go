@@ -13,7 +13,8 @@ import (
 type ResponsesNamespaceName = NamespacedToolName
 
 // FlattenResponsesNamespaces converts Codex private namespace declarations into
-// public Responses function tools and rewrites namespace-qualified request calls.
+// public Responses tools and rewrites namespace-qualified request calls.
+// function 与 custom 子工具都会被摊平（见 isFlattenableNamespaceChild）。
 func FlattenResponsesNamespaces(req map[string]any) (map[string]ResponsesNamespaceName, bool, error) {
 	return FlattenResponsesNamespacesExcept(req, nil)
 }
@@ -54,7 +55,7 @@ func FlattenResponsesNamespacesExcept(req map[string]any, preserved map[string]b
 		}
 		for _, rawChild := range namespaceChildren(tool) {
 			child, ok := rawChild.(map[string]any)
-			if !ok || strings.TrimSpace(stringValue(child["type"])) != "function" {
+			if !ok || !isFlattenableNamespaceChild(child) {
 				continue
 			}
 			name := strings.TrimSpace(stringValue(child["name"]))
@@ -91,7 +92,7 @@ func FlattenResponsesNamespacesExcept(req map[string]any, preserved map[string]b
 		}
 		for _, rawChild := range namespaceChildren(tool) {
 			child, ok := rawChild.(map[string]any)
-			if !ok || strings.TrimSpace(stringValue(child["type"])) != "function" {
+			if !ok || !isFlattenableNamespaceChild(child) {
 				continue
 			}
 			name := strings.TrimSpace(stringValue(child["name"]))
@@ -121,8 +122,9 @@ func FlattenResponsesNamespacesExcept(req map[string]any, preserved map[string]b
 	return names, true, nil
 }
 
-// RestoreResponsesNamespaceCalls restores flattened function calls in a JSON
+// RestoreResponsesNamespaceCalls restores flattened tool calls in a JSON
 // Responses payload to the namespace/name identity expected by Codex.
+// function_call 与 custom_tool_call 都参与还原（见 isNamespaceQualifiedCallType）。
 func RestoreResponsesNamespaceCalls(payload []byte, names map[string]ResponsesNamespaceName) ([]byte, bool, error) {
 	if len(payload) == 0 || len(names) == 0 {
 		return payload, false, nil
@@ -152,6 +154,26 @@ func namespaceChildren(tool map[string]any) []any {
 	return children
 }
 
+// isFlattenableNamespaceChild 判断 namespace 子工具是否参与摊平。
+//
+// function 与 custom 都必须摊平：Codex CLI 0.147+ 把 exec（唯一能跑命令/读文件的
+// 编排工具，输入是自由文本 JavaScript）声明为 namespace 内的 custom 子工具。只放行
+// function 会把它静默丢弃，模型于是收到一组碰不到文件系统的工具，表现为"没有提供
+// 文件读取或终端执行工具"式的拒绝。
+//
+// 摊平时保留子工具原本的 type：custom 的降级（type→function + 自由文本 schema）
+// 由 AdaptResponsesClientTools 的降级循环统一处理，它跑在摊平之后，会按摊平名把
+// 工具登记进 CustomTools，回程才能还原成 custom_tool_call。此处提前降级会让那份
+// 登记落空。
+func isFlattenableNamespaceChild(child map[string]any) bool {
+	switch strings.TrimSpace(stringValue(child["type"])) {
+	case "function", "custom":
+		return true
+	default:
+		return false
+	}
+}
+
 func rewriteNamespaceQualifiedCalls(value any, names map[string]ResponsesNamespaceName) {
 	switch typed := value.(type) {
 	case []any:
@@ -159,12 +181,25 @@ func rewriteNamespaceQualifiedCalls(value any, names map[string]ResponsesNamespa
 			rewriteNamespaceQualifiedCalls(item, names)
 		}
 	case map[string]any:
-		if strings.TrimSpace(stringValue(typed["type"])) == "function_call" {
+		if isNamespaceQualifiedCallType(stringValue(typed["type"])) {
 			rewriteNamespaceQualifiedCall(typed, names)
 		}
 		for _, child := range typed {
 			rewriteNamespaceQualifiedCalls(child, names)
 		}
+	}
+}
+
+// isNamespaceQualifiedCallType 指示某个历史项类型是否带 namespace+name 身份。
+// custom_tool_call 与 function_call 同样按 namespace 路由（namespace 内的 custom
+// 子工具，如 Codex 的 exec），漏掉它会让历史里的 exec 调用保持 namespace 限定名，
+// 与摊平后的工具声明对不上，上游按未声明工具处理。
+func isNamespaceQualifiedCallType(typ string) bool {
+	switch strings.TrimSpace(typ) {
+	case "function_call", "custom_tool_call":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -192,7 +227,7 @@ func restoreResponsesNamespaceValue(value any, names map[string]ResponsesNamespa
 			changed = restoreResponsesNamespaceValue(item, names) || changed
 		}
 	case map[string]any:
-		if strings.TrimSpace(stringValue(typed["type"])) == "function_call" {
+		if isNamespaceQualifiedCallType(stringValue(typed["type"])) {
 			if entry, ok := names[strings.TrimSpace(stringValue(typed["name"]))]; ok {
 				typed["name"] = entry.Name
 				typed["namespace"] = entry.Namespace

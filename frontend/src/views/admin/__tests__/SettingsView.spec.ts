@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 
+import enCommon from "@/i18n/locales/en/common";
+import enSettings from "@/i18n/locales/en/admin/settings";
+import zhCommon from "@/i18n/locales/zh/common";
+import zhSettings from "@/i18n/locales/zh/admin/settings";
 import SettingsView from "../SettingsView.vue";
 
 const {
@@ -444,6 +448,8 @@ const baseSettingsResponse = {
   fallback_model_openai: "",
   fallback_model_gemini: "",
   fallback_model_antigravity: "",
+  grok_default_text_model: "grok-4.5",
+  grok_cross_client_model_map_enabled: false,
   enable_identity_patch: false,
   identity_patch_prompt: "",
   ops_monitoring_enabled: false,
@@ -592,6 +598,28 @@ async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
   await usersTabButton?.trigger("click");
   await flushPromises();
 }
+
+describe("admin SettingsView email domain quota copy", () => {
+  it("documents the email domain quota and empty-whitelist behavior in both locales", () => {
+    expect(zhCommon.auth.emailDomainRegistrationLimit).toContain("主流邮箱");
+    expect(zhCommon.auth.emailDomainRegistrationLimit).toContain("联系客服");
+    expect(enCommon.auth.emailDomainRegistrationLimit).toContain("mainstream email");
+    expect(enCommon.auth.emailDomainRegistrationLimit).toContain("contact support");
+
+    // 白名单 hint 描述严格默认语义；额度语义移入独立开关的 hint。
+    const zhWhitelistHint = zhSettings.settings.registration.emailSuffixWhitelistHint;
+    const enWhitelistHint = enSettings.settings.registration.emailSuffixWhitelistHint;
+    expect(zhWhitelistHint).toContain("留空则不限制");
+    expect(enWhitelistHint).toContain("leave empty for no restriction");
+
+    const zhQuotaHint = zhSettings.settings.registration.emailDomainQuotaHint;
+    const enQuotaHint = enSettings.settings.registration.emailDomainQuotaHint;
+    expect(zhQuotaHint).toContain("其他可注册主域名各限注册一个账户");
+    expect(zhQuotaHint).toContain("关闭时非白名单域名直接拒绝");
+    expect(enQuotaHint).toContain("one account");
+    expect(enQuotaHint).toContain("When disabled");
+  });
+});
 
 describe("admin SettingsView payment visible method controls", () => {
   beforeEach(() => {
@@ -1266,6 +1294,34 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(showSuccess).toHaveBeenCalledWith("上游倍率自动探测设置已保存");
   });
 
+  it("loads and saves configurable Grok cross-client model mapping", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      grok_default_text_model: "grok-4.1-fast",
+      grok_cross_client_model_map_enabled: true,
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const modelInput = wrapper.get('[data-testid="grok-default-text-model"]');
+    const mappingToggle = wrapper.get(
+      '[data-testid="grok-cross-client-model-map-toggle"]',
+    );
+    expect((modelInput.element as HTMLInputElement).value).toBe("grok-4.1-fast");
+    expect((mappingToggle.element as HTMLInputElement).checked).toBe(true);
+
+    await modelInput.setValue("grok-custom-text");
+    await mappingToggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    const payload = updateSettings.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(payload.grok_default_text_model).toBe("grok-custom-text");
+    expect(payload.grok_cross_client_model_map_enabled).toBe(false);
+  });
+
   it("loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in", async () => {
     const wrapper = mountView();
 
@@ -1433,6 +1489,37 @@ describe("admin SettingsView payment visible method controls", () => {
     // supported_types should be normalized to an empty array, not null
     expect(Array.isArray(receivedProviders[0].supported_types)).toBe(true);
     expect(receivedProviders[0].supported_types).toEqual([]);
+  });
+
+  it("renders all Grok default base URL mode options and saves the picked value", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const select = wrapper.get('[data-testid="grok-default-base-url-mode"]');
+
+    // 五个上游选项必须齐全且顺序与取值稳定（保存的是 value，不是 label）
+    const optionValues = select
+      .findAll("option")
+      .map((node) => (node.element as HTMLOptionElement).value);
+    expect(optionValues).toEqual([
+      "cli",
+      "api",
+      "us-east-1",
+      "us-west-2",
+      "eu-west-1",
+    ]);
+
+    // 默认值来自 form 初始化
+    expect((select.element as HTMLSelectElement).value).toBe("cli");
+
+    await select.setValue("us-west-2");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ grok_default_base_url_mode: "us-west-2" }),
+    );
   });
 });
 

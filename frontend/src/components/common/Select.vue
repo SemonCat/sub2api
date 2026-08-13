@@ -151,6 +151,7 @@ interface Props {
   labelKey?: string
   creatable?: boolean
   creatablePrefix?: string
+  creatableLabelMode?: 'prefixed' | 'raw'
   size?: 'sm' | 'md'
   clearable?: boolean
   id?: string
@@ -169,6 +170,7 @@ const props = withDefaults(defineProps<Props>(), {
   searchable: 'auto',
   creatable: false,
   creatablePrefix: '',
+  creatableLabelMode: 'prefixed',
   clearable: false,
   valueKey: 'value',
   labelKey: 'label',
@@ -292,7 +294,8 @@ const filteredOptions = computed(() => {
     if (props.creatable && searchQuery.value.trim()) {
       const trimmed = searchQuery.value.trim()
       const prefix = props.creatablePrefix || t('common.search')
-      opts = [{ [props.valueKey]: trimmed, [props.labelKey]: `${prefix} "${trimmed}"`, _creatable: true }, ...opts]
+      const label = props.creatableLabelMode === 'raw' ? trimmed : `${prefix} "${trimmed}"`
+      opts = [{ [props.valueKey]: trimmed, [props.labelKey]: label, _creatable: true }, ...opts]
     }
   }
   return opts

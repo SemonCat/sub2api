@@ -4,7 +4,7 @@
 
 # Sub2API
 
-[![Go](https://img.shields.io/badge/Go-1.25.7-00ADD8.svg)](https://golang.org/)
+[![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791.svg)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
@@ -278,6 +278,16 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 <td><a href="https://hao.ai">hao.ai</a> 是面向开发者与团队的高速、稳定大模型统一 API 网关。通过一个 API Key 和统一接口，即可接入 GPT、Claude、xAI Grok 等主流模型，兼容 OpenAI、Anthropic 等常用协议与 SDK。平台提供模型路由、故障回退、团队管理及完整调用日志，模型价格低至官方参考价的 1.5 折，帮助用户更简单、更稳定、更低成本地构建 AI 应用。</td>
 </tr>
 
+<tr>
+<td width="180"><a href="https://www.swiftproxy.net/?ref=sub2api"><img src="assets/partners/logos/swiftprox.png" alt="Swiftproxy" width="150"></a></td>
+<td>Swiftproxy 是面向开发者的高性能代理解决方案，提供稳定可靠的住宅代理和静态住宅代理服务。拥有 9000 万+ 纯净住宅 IP，覆盖全球，支持灵活轮换和精准地理定位，帮助网页抓取、AI 自动化、浏览器自动化、SEO 监控和多账号管理等项目突破访问限制，提升工作流效率。支持 HTTP(S) 和 SOCKS5 协议，兼容 Playwright、Selenium、Puppeteer 等主流自动化工具，动态代理流量用完为止永不过期，支持免费测试 — <a href="https://www.swiftproxy.net/?ref=sub2api">立即开始免费测试</a>！</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://www.duckip.cn/?keyword=cu7oog6y"><img src="assets/partners/logos/duckip.png" alt="DuckIP" width="150"></a></td>
+<td><a href="https://www.duckip.cn/?keyword=cu7oog6y">DuckIP</a> - 9000 万+ 全球住宅网络资源，覆盖 195+ 国家和地区，支持轮换和粘性会话，适用于公共数据采集、RAG 更新、模型评估和多区域数据工作负载。🟢住宅代理 - 8 折优惠；🟢静态住宅代理 - ¥50.00/IP 起；🟢无限住宅代理 - ¥19.8/小时 起。✅免费领取 500M 试用流量。</td>
+</tr>
+
 </table>
 
 ## 项目概述
@@ -309,7 +319,7 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 
 | 组件 | 技术 |
 |------|------|
-| 后端 | Go 1.25.7, Gin, Ent |
+| 后端 | Go 1.26.5, Gin, Ent |
 | 前端 | Vue 3.4+, Vite 5+, TailwindCSS |
 | 数据库 | PostgreSQL 15+ |
 | 缓存/队列 | Redis 7+ |
@@ -344,7 +354,7 @@ Nginx 默认会丢弃名称中含下划线的请求头（如 `session_id`），�
 #### 安装步骤
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/nianzs/sub2api/main/deploy/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash
 ```
 
 脚本会自动：
@@ -394,7 +404,7 @@ sudo journalctl -u sub2api -f
 sudo systemctl restart sub2api
 
 # 卸载
-curl -sSL https://raw.githubusercontent.com/nianzs/sub2api/main/deploy/install.sh | sudo bash -s -- uninstall -y
+curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash -s -- uninstall -y
 ```
 
 ---
@@ -408,7 +418,7 @@ curl -sSL https://raw.githubusercontent.com/nianzs/sub2api/main/deploy/install.s
 - Docker 20.10+
 - Docker Compose v2+
 
-Compose 文件默认使用当前仓库发布的 `ghcr.io/nianzs/sub2api:latest`。生产环境可在 `.env` 中通过 `SUB2API_IMAGE=ghcr.io/nianzs/sub2api:<版本号>` 固定版本。
+Compose 文件默认使用上游发布的 `weishaw/sub2api:latest`。生产环境可在 `.env` 中通过 `SUB2API_IMAGE=weishaw/sub2api:<版本号>` 固定版本。
 
 #### 快速开始（一键部署）
 
@@ -419,7 +429,7 @@ Compose 文件默认使用当前仓库发布的 `ghcr.io/nianzs/sub2api:latest`�
 mkdir -p sub2api-deploy && cd sub2api-deploy
 
 # 下载并运行部署准备脚本
-curl -sSL https://raw.githubusercontent.com/nianzs/sub2api/main/deploy/docker-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh | bash
 
 # 启动服务
 docker compose up -d
@@ -441,7 +451,7 @@ docker compose logs -f sub2api
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/nianzs/sub2api.git
+git clone https://github.com/Wei-Shaw/sub2api.git
 cd sub2api/deploy
 
 # 2. 复制环境配置文件
@@ -583,7 +593,7 @@ rm -rf data/ postgres_data/ redis_data/
 Apple 芯片 Mac 在 macOS 26 上可使用 Apple `container` 1.1.0 或更高版本运行完整的 Sub2API、PostgreSQL 和 Redis：
 
 ```bash
-git clone https://github.com/nianzs/sub2api.git
+git clone https://github.com/Wei-Shaw/sub2api.git
 cd sub2api/deploy
 ./apple-container.sh init
 ./apple-container.sh up
@@ -609,7 +619,7 @@ cd sub2api/deploy
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/nianzs/sub2api.git
+git clone https://github.com/Wei-Shaw/sub2api.git
 cd sub2api
 
 # 2. 安装 pnpm（如果还没有安装）

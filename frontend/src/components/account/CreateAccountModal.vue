@@ -1100,11 +1100,14 @@
         </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.oauth.kiro.regionLabel') }}</label>
-          <input
+          <Select
             v-model="kiroIDCRegion"
-            type="text"
-            class="input"
+            :options="KIRO_REGION_SELECT_OPTIONS"
+            searchable
+            creatable
+            creatable-label-mode="raw"
             :placeholder="t('admin.accounts.oauth.kiro.regionPlaceholder')"
+            data-testid="kiro-idc-region-select"
           />
         </div>
       </div>
@@ -1134,6 +1137,19 @@
             placeholder="ksk_..."
           />
           <p class="input-hint">{{ apiKeyHint }}</p>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.accounts.kiro.apiRegionLabel') }}</label>
+          <Select
+            v-model="kiroAPIRegion"
+            :options="KIRO_REGION_SELECT_OPTIONS"
+            searchable
+            creatable
+            creatable-label-mode="raw"
+            placeholder="us-east-1"
+            data-testid="kiro-api-region-select"
+          />
+          <p class="input-hint">{{ t('admin.accounts.kiro.apiRegionHint') }}</p>
         </div>
       </div>
 
@@ -3485,6 +3501,24 @@
         </div>
       </div>
 
+      <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
+      <div
+        v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexFingerprintMode') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexFingerprintModeDesc') }}
+            </p>
+          </div>
+          <div class="w-52 flex-shrink-0">
+            <Select v-model="codexFingerprintMode" data-testid="create-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" />
+          </div>
+        </div>
+      </div>
+
       <!-- OpenAI Compact 能力配置 -->
       <div
         v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
@@ -3738,6 +3772,7 @@
         :show-agent-identity-option="form.platform === 'openai'"
         :show-codex-pat-option="form.platform === 'openai'"
         :show-sso-option="form.platform === 'grok'"
+        :show-email-password-option="false"
         :show-manual-option="true"
         :initial-input-method="'manual'"
         :platform="form.platform"
@@ -3752,6 +3787,7 @@
         @import-codex-session="handleOpenAIImportCodexSession"
         @import-codex-pat="handleOpenAIImportCodexPAT"
         @import-sso="handleGrokImportSSO"
+        @authorize-password="handleGrokAuthorizePassword"
       />
 
     </div>
@@ -3853,8 +3889,8 @@
   <BaseDialog
     :show="showGeminiHelpDialog"
     :title="t('admin.accounts.gemini.helpDialog.title')"
+    width="wide"
     @close="showGeminiHelpDialog = false"
-    max-width="max-w-3xl"
   >
     <div class="space-y-6">
       <!-- Setup Guide Section -->
@@ -4142,6 +4178,7 @@ import {
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_SELECT_OPTIONS, BEDROCK_REGION_SELECT_OPTIONS } from '@/constants/account'
+import { KIRO_REGION_SELECT_OPTIONS } from '@/constants/kiroRegions'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -4289,6 +4326,7 @@ const KIRO_RELAY_DEFAULT_PRIORITY = 100
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const kiroAPIRegion = ref('us-east-1')
 const upstreamBillingAutoProbeEnabled = ref(true)
 
 const syncPreviewCredentials = computed(() => {
@@ -4392,6 +4430,14 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
+type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+const codexFingerprintMode = ref<CodexFingerprintMode>('session')
+const codexFingerprintModeOptions = computed(() => [
+  { value: 'off' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintOff') },
+  { value: 'device' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintDevice') },
+  { value: 'session' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintSession') },
+  { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') },
+])
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
@@ -4890,6 +4936,7 @@ watch(
       kiroOAuthProvider.value = 'google'
       apiKeyBaseUrl.value = ''
       apiKeyValue.value = ''
+      kiroAPIRegion.value = 'us-east-1'
     } else {
       allowOverages.value = false
       antigravityProjectId.value = ''
@@ -5368,6 +5415,7 @@ const resetForm = () => {
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
+  kiroAPIRegion.value = 'us-east-1'
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
@@ -5422,6 +5470,7 @@ const resetForm = () => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
+  codexFingerprintMode.value = 'session'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
@@ -5520,6 +5569,11 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     extra.codex_cli_only_allow_app_server = true
   } else {
     delete extra.codex_cli_only_allow_app_server
+  }
+  if (codexFingerprintMode.value !== 'session') {
+    extra.codex_fingerprint_mode = codexFingerprintMode.value
+  } else {
+    delete extra.codex_fingerprint_mode
   }
   if (openAICompactMode.value !== 'auto') {
     extra.openai_compact_mode = openAICompactMode.value
@@ -5821,7 +5875,8 @@ const handleSubmit = async () => {
     // Kiro API Key 账号直连 AWS(q.{region}.amazonaws.com),不使用 base_url。
     // 区域由凭据 api_region 控制(默认 us-east-1),无需也不展示 Base URL。
     const credentials: Record<string, unknown> = {
-      api_key: apiKeyValue.value.trim()
+      api_key: apiKeyValue.value.trim(),
+      api_region: kiroAPIRegion.value.trim() || 'us-east-1'
     }
 
     const modelMapping = buildModelMappingObject('mapping', [], kiroModelMappings.value)
@@ -6278,6 +6333,116 @@ const handleGrokImportSSO = async (ssoInput: string) => {
   } catch (error: any) {
     grokOAuth.error.value = error.response?.data?.detail || error.message || t('admin.accounts.oauth.grok.failedToConvertSSO')
     appStore.showError(grokOAuth.error.value)
+  } finally {
+    grokOAuth.loading.value = false
+  }
+}
+
+/**
+ * Grok password login: each line is email----password.
+ * Password is only used for the authorize API call; buildCredentials never stores it.
+ */
+const handleGrokAuthorizePassword = async (emailPasswordInput: string) => {
+  if (!emailPasswordInput.trim()) return
+  if (!validateGrokOAuthUpstreamConfig()) return
+
+  const lines = emailPasswordInput
+    .split('\n')
+    // Keep the password portion byte-for-byte; trim is only for determining
+    // whether this textarea line is blank.
+    .filter((line) => line.trim() && line.includes('----'))
+
+  if (lines.length === 0) {
+    grokOAuth.error.value = t(
+      'admin.accounts.oauth.grok.pleaseEnterPassword',
+      'Please enter email----password (one per line)'
+    )
+    return
+  }
+
+  grokOAuth.loading.value = true
+  grokOAuth.error.value = ''
+
+  let successCount = 0
+  let failedCount = 0
+  const errors: string[] = []
+
+  try {
+    for (let i = 0; i < lines.length; i++) {
+      try {
+        const tokenInfo = await grokOAuth.authorizePassword(lines[i], form.proxy_id)
+        if (!tokenInfo) {
+          failedCount++
+          errors.push(`#${i + 1}: ${grokOAuth.error.value || 'Authorization failed'}`)
+          grokOAuth.error.value = ''
+          continue
+        }
+
+        const credentials = grokOAuth.buildCredentials(tokenInfo)
+        applyGrokOAuthUpstreamConfig(credentials)
+        const extra = grokOAuth.buildExtraInfo(tokenInfo)
+        const accountName =
+          lines.length > 1
+            ? `${form.name || tokenInfo.email || 'Grok OAuth Account'} #${i + 1}`
+            : form.name || tokenInfo.email || 'Grok OAuth Account'
+
+        const modelMapping = buildModelMappingObject(
+          modelRestrictionMode.value,
+          allowedModels.value,
+          modelMappings.value
+        )
+        if (modelMapping) {
+          credentials.model_mapping = modelMapping
+        }
+        if (!applyTempUnschedConfig(credentials)) {
+          return
+        }
+
+        await adminAPI.accounts.create({
+          name: accountName,
+          notes: form.notes,
+          platform: 'grok',
+          type: 'oauth',
+          credentials,
+          extra,
+          proxy_id: form.proxy_id,
+          concurrency: form.concurrency,
+          load_factor: form.load_factor ?? undefined,
+          priority: form.priority,
+          rate_multiplier: form.rate_multiplier,
+          group_ids: form.group_ids,
+          expires_at: form.expires_at,
+          auto_pause_on_expired: autoPauseOnExpired.value
+        })
+        successCount++
+      } catch (error: any) {
+        failedCount++
+        const errMsg = error.response?.data?.detail || error.message || 'Unknown error'
+        errors.push(`#${i + 1}: ${errMsg}`)
+      }
+    }
+
+    if (successCount > 0 && failedCount === 0) {
+      appStore.showSuccess(
+        lines.length > 1
+          ? t('admin.accounts.oauth.batchSuccess', { count: successCount })
+          : t('admin.accounts.accountCreated')
+      )
+      emit('created')
+      handleClose()
+    } else if (successCount > 0) {
+      appStore.showWarning(
+        t('admin.accounts.oauth.batchPartialSuccess', {
+          success: successCount,
+          failed: failedCount
+        })
+      )
+      grokOAuth.error.value = errors.join('\n')
+      emit('created')
+    } else {
+      grokOAuth.error.value = errors.join('\n')
+      appStore.showError(t('admin.accounts.oauth.batchFailed'))
+    }
   } finally {
     grokOAuth.loading.value = false
   }

@@ -56,6 +56,19 @@
             @select="editBaseUrl = $event"
           />
         </div>
+        <div v-if="isKiroDirectApiKey">
+          <label class="input-label">{{ t('admin.accounts.kiro.apiRegionLabel') }}</label>
+          <Select
+            v-model="editKiroAPIRegion"
+            :options="KIRO_REGION_SELECT_OPTIONS"
+            searchable
+            creatable
+            creatable-label-mode="raw"
+            placeholder="us-east-1"
+            data-testid="edit-kiro-api-region-select"
+          />
+          <p class="input-hint">{{ t('admin.accounts.kiro.apiRegionHint') }}</p>
+        </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.apiKey') }}</label>
           <input
@@ -1542,6 +1555,40 @@
         </div>
       </div>
 
+
+      <div
+        v-if="supportsAccountSchedulingThresholdOverride"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="account-scheduling-threshold-section"
+      >
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.accountSchedulingThresholdOverride') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.accountSchedulingThresholdOverrideHint') }}
+            </p>
+          </div>
+          <input
+            v-model="accountSchedulingThresholdOverrideEnabled"
+            data-testid="account-scheduling-threshold-override-enabled"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div v-if="accountSchedulingThresholdOverrideEnabled">
+          <label class="input-label">{{ t('admin.accounts.accountSchedulingThresholdOverrideValue') }}</label>
+          <input
+            v-model.number="accountSchedulingThresholdOverrideValue"
+            data-testid="account-scheduling-threshold-override-value"
+            type="number"
+            min="1"
+            max="100"
+            class="input"
+          />
+          <p class="input-hint">{{ t('admin.accounts.accountSchedulingThresholdOverrideDisabledHint') }}</p>
+        </div>
+      </div>
+
       <!-- Intercept Warmup Requests (Anthropic/Antigravity) -->
       <div
         v-if="account?.platform === 'anthropic' || account?.platform === 'antigravity'"
@@ -2128,6 +2175,24 @@
               ]"
             />
           </button>
+        </div>
+      </div>
+
+      <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexFingerprintMode') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexFingerprintModeDesc') }}
+            </p>
+          </div>
+          <div class="w-52 flex-shrink-0">
+            <Select v-model="codexFingerprintMode" data-testid="edit-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" />
+          </div>
         </div>
       </div>
 
@@ -2868,8 +2933,9 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
-import { isKiroRelayAccount } from '@/utils/kiroAccount'
+import { isKiroDirectApiKeyAccount, isKiroRelayAccount } from '@/utils/kiroAccount'
 import { VERTEX_LOCATION_SELECT_OPTIONS } from '@/constants/account'
+import { KIRO_REGION_SELECT_OPTIONS } from '@/constants/kiroRegions'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -2932,6 +2998,14 @@ const isKiroOAuthAccount = computed(() => props.account?.platform === 'kiro' && 
 const isKiroAccount = computed(() => props.account?.platform === 'kiro')
 // Kiro 外部中转账号(apikey + 已配 base_url):编辑时显示 base_url 输入。
 const isKiroRelay = computed(() => isKiroRelayAccount(props.account))
+// Kiro 直连 API Key 账号(apikey + 无 base_url):仅这类账号的推理区域由 api_region 控制。
+// OAuth/IdC 账号的 region 是 Identity Center 区域,不参与推理路由,故不展示本字段。
+const isKiroDirectApiKey = computed(() => isKiroDirectApiKeyAccount(props.account))
+
+const resolveKiroAPIRegionInput = (credentials: Record<string, unknown>) => {
+  const value = credentials.api_region
+  return typeof value === 'string' && value.trim() ? value.trim() : 'us-east-1'
+}
 
 // Model mapping type
 interface ModelMapping {
@@ -2950,6 +3024,7 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+const editKiroAPIRegion = ref('us-east-1')
 const kiroCreditUnitPriceUsd = ref(0)
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
@@ -3041,6 +3116,12 @@ const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
 const isSyncingAntigravityUpstream = ref(false)
 const tempUnschedEnabled = ref(false)
+const accountSchedulingThresholdOverrideEnabled = ref(false)
+const accountSchedulingThresholdOverrideValue = ref(100)
+const ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY = 'account_scheduling_threshold'
+const supportsAccountSchedulingThresholdOverride = computed(() =>
+  supportsAccountSchedulingThresholdOverridePlatform(props.account?.platform)
+)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const getModelMappingKey = createStableObjectKeyResolver<ModelMapping>('edit-model-mapping')
 const getOpenAICompactModelMappingKey = createStableObjectKeyResolver<ModelMapping>('edit-openai-compact-model-mapping')
@@ -3135,6 +3216,8 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
+type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+const codexFingerprintMode = ref<CodexFingerprintMode>('session')
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
@@ -3166,6 +3249,13 @@ const editWeeklyResetMode = ref<'rolling' | 'fixed' | null>(null)
 const editWeeklyResetDay = ref<number | null>(null)
 const editWeeklyResetHour = ref<number | null>(null)
 const editResetTimezone = ref<string | null>(null)
+const codexFingerprintModeOptions = computed(() => [
+  { value: 'off' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintOff') },
+  { value: 'device' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintDevice') },
+  { value: 'session' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintSession') },
+  { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') },
+])
+
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
@@ -3594,6 +3684,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
+  codexFingerprintMode.value = 'session'
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -3644,6 +3735,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
+    }
+    if (newAccount.type === 'oauth') {
+      const fpMode = extra?.codex_fingerprint_mode as string | undefined
+      codexFingerprintMode.value = (['off', 'device', 'session', 'full'].includes(fpMode || '')
+        ? fpMode as CodexFingerprintMode
+        : 'session')
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -3733,6 +3830,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   loadQuotaControlSettings(newAccount)
 
   loadTempUnschedRules(credentials)
+  loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
   // Load header override state (anthropic/openai apikey + grok apikey/oauth)
   headerOverrideEnabled.value = false
@@ -3778,6 +3876,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
             ? 'https://api.x.ai/v1'
             : 'https://api.anthropic.com'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
+    editKiroAPIRegion.value = isKiroDirectApiKeyAccount(newAccount)
+      ? resolveKiroAPIRegionInput(credentials)
+      : 'us-east-1'
 
     // Load model mappings and detect mode
     if (newAccount.platform === 'kiro') {
@@ -3890,6 +3991,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     selectedErrorCodes.value = []
   }
   editApiKey.value = ''
+  if (newAccount.platform !== 'kiro' || newAccount.type !== 'apikey') {
+    editKiroAPIRegion.value = 'us-east-1'
+  }
 }
 
 async function loadTLSProfiles() {
@@ -4134,6 +4238,69 @@ const applyTempUnschedConfig = (credentials: Record<string, unknown>) => {
   credentials.temp_unschedulable_enabled = true
   credentials.temp_unschedulable_rules = rules
   return true
+}
+
+
+function supportsAccountSchedulingThresholdOverridePlatform(platform: Account['platform'] | undefined) {
+  return platform === 'openai' || platform === 'anthropic' || platform === 'grok'
+}
+
+function normalizeAccountSchedulingThresholdOverride(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return null
+  }
+  const integer = Math.trunc(numeric)
+  if (integer < 1 || integer > 100) {
+    return null
+  }
+  return integer
+}
+
+function clampAccountSchedulingThresholdOverride(value: unknown): number {
+  return Math.min(100, Math.max(1, Math.trunc(Number(value) || 100)))
+}
+
+function loadAccountSchedulingThresholdOverride(
+  platform: Account['platform'] | undefined,
+  credentials: Record<string, unknown> | undefined
+) {
+  if (!supportsAccountSchedulingThresholdOverridePlatform(platform)) {
+    accountSchedulingThresholdOverrideEnabled.value = false
+    accountSchedulingThresholdOverrideValue.value = 100
+    return
+  }
+  const value = normalizeAccountSchedulingThresholdOverride(
+    credentials?.[ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY]
+  )
+  accountSchedulingThresholdOverrideEnabled.value = value !== null
+  accountSchedulingThresholdOverrideValue.value = value ?? 100
+}
+
+const applyAccountSchedulingThresholdOverridePatch = (
+  credentials: Record<string, unknown>,
+  currentCredentials: Record<string, unknown>,
+  platform: Account['platform'] | undefined = props.account?.platform
+) => {
+  if (!supportsAccountSchedulingThresholdOverridePlatform(platform)) {
+    return
+  }
+  const current = normalizeAccountSchedulingThresholdOverride(
+    currentCredentials[ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY]
+  )
+  if (!accountSchedulingThresholdOverrideEnabled.value) {
+    if (current !== null) {
+      credentials[ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY] = null
+    }
+    return
+  }
+  const next = clampAccountSchedulingThresholdOverride(accountSchedulingThresholdOverrideValue.value)
+  if (current !== next) {
+    credentials[ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY] = next
+  }
 }
 
 function loadTempUnschedRules(credentials?: Record<string, unknown>) {
@@ -4446,6 +4613,9 @@ const handleSubmit = async () => {
         appStore.showError(t('admin.accounts.apiKeyIsRequired'))
         return
       }
+      if (isKiroDirectApiKey.value) {
+        newCredentials.api_region = editKiroAPIRegion.value.trim() || 'us-east-1'
+      }
 
       // Add model mapping if configured（OpenAI 开启自动透传时保留现有映射，不再编辑）
       if (shouldApplyModelMapping) {
@@ -4509,6 +4679,7 @@ const handleSubmit = async () => {
 
       // Add intercept warmup requests setting
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4527,6 +4698,7 @@ const handleSubmit = async () => {
       // Add intercept warmup requests setting
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
 
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4575,6 +4747,7 @@ const handleSubmit = async () => {
       }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4632,6 +4805,7 @@ const handleSubmit = async () => {
       }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4643,6 +4817,7 @@ const handleSubmit = async () => {
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4999,6 +5174,15 @@ const handleSubmit = async () => {
           newExtra.codex_cli_only_allow_app_server = true
         } else {
           delete newExtra.codex_cli_only_allow_app_server
+        }
+      }
+
+      // 指纹收敛模式：默认 session，不写入；非默认值显式写入（包括 off）
+      if (props.account.type === 'oauth') {
+        if (codexFingerprintMode.value !== 'session') {
+          newExtra.codex_fingerprint_mode = codexFingerprintMode.value
+        } else {
+          delete newExtra.codex_fingerprint_mode
         }
       }
 
