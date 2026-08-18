@@ -176,8 +176,6 @@ describe('GroupsView duplicate action', () => {
       fn.mockReset()
     }
 
-    getLiveCapability.mockResolvedValue({ supported: false })
-
     listGroups.mockResolvedValue({
       items: [sourceGroup],
       total: 1,

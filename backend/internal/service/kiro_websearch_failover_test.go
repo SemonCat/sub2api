@@ -224,6 +224,25 @@ func TestOpenKiroAnthropicStreamResponsePreservesWebSearchStreamAfterPreflight(t
 	require.NoError(t, readErr)
 	require.NoError(t, resp.Body.Close())
 	require.Contains(t, string(responseBody), "event: message_start")
-	require.Contains(t, string(responseBody), "REAL_STREAM_OK")
+
+	var streamedText strings.Builder
+	for _, line := range strings.Split(string(responseBody), "\n") {
+		data, found := strings.CutPrefix(line, "data: ")
+		if !found {
+			continue
+		}
+		var event struct {
+			Type  string `json:"type"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+		if json.Unmarshal([]byte(data), &event) == nil &&
+			event.Type == "content_block_delta" && event.Delta.Type == "text_delta" {
+			streamedText.WriteString(event.Delta.Text)
+		}
+	}
+	require.Contains(t, streamedText.String(), "REAL_STREAM_OK")
 	require.Len(t, upstream.requests, 2)
 }
