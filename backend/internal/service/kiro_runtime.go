@@ -623,7 +623,7 @@ func (s *GatewayService) buildKiroPayloadForAccountWithArn(ctx context.Context, 
 	_ = ctx
 	_ = token
 	anthropicBody = prepareKiroPayloadBodyForRequestModel(anthropicBody, requestModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(anthropicBody, modelID, profileArn, "AI_EDITOR", headers)
+	buildResult, err := kiropkg.BuildKiroPayloadWithRequestModel(anthropicBody, modelID, requestModel, profileArn, "AI_EDITOR", headers)
 	if err != nil {
 		return nil, err
 	}

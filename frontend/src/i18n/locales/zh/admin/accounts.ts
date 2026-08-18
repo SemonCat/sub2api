@@ -369,10 +369,6 @@ export default {
         creditsExhaustedUntil: 'AI Credits 已用尽，预计 {time} 恢复',
         overloadedUntil: '负载过重，重置时间：{time}',
         viewTempUnschedDetails: '查看临时不可调度详情',
-        overageActive: '超量',
-        overageActiveUntil: '当前正在使用超量额度，重置窗口时间 {time}',
-        overageExhausted: '超量额度已用尽',
-        overageExhaustedUntil: '超量额度已用尽，预计 {time} 恢复',
         tempUnschedulableUntil: '预计 {time} 恢复'
       },
       tempUnschedulable: {
@@ -457,7 +453,6 @@ export default {
         kiroCredits: 'Credits',
         kiroDaysLeft: '剩余 {days} 天',
         kiroExpires: '到期',
-        kiroOverage: '超额',
         kiroReset: '重置'
       },
       openaiQuotaReset: {
@@ -673,10 +668,10 @@ export default {
         codexCLIOnlyAppServer: '允许 Codex app-server 客户端',
         codexCLIOnlyAppServerDesc: '仅在上方开关开启时生效。开启后本账号额外放行内嵌 Codex 引擎、经 app-server 协议接入的第三方客户端（如 Claude Code 的 codex 插件），仍需通过全局引擎指纹门；与全局 app-server 开关取 OR（任一开即放行）。',
         codexFingerprintMode: 'Codex 指纹收敛',
-        codexFingerprintModeDesc: '多人共享同一 OAuth 账号时，将各用户的设备/会话标识收敛为账号级恒定值，减少上游可见的设备数和会话数。关闭时原样透传客户端标识。',
-        codexFingerprintOff: '关闭（透传）',
+        codexFingerprintModeDesc: '多人共享同一 OAuth 账号时，将各用户的设备/会话标识收敛为账号级恒定值，减少上游可见的设备数和会话数。默认关闭（原样透传客户端标识），需要时再显式开启；部分账号开启收敛后出现过额度缩水，请按自己的实测结果选择。',
+        codexFingerprintOff: '关闭（透传，默认）',
         codexFingerprintDevice: '仅设备',
-        codexFingerprintSession: '设备+会话（推荐）',
+        codexFingerprintSession: '设备+会话',
         codexFingerprintFull: '完全收敛',
         codexImageTool: 'Codex 图片桥接策略',
         codexImageToolDesc:

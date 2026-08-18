@@ -173,11 +173,8 @@ func TestAccountUsageService_GetUsage_KiroMapsCredits(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"nextDateReset": ` + strconv.FormatInt(resetAt, 10) + `,
-			"overageConfiguration": {"overageStatus":"ENABLED"},
 			"subscriptionInfo": {"subscriptionTitle":"KIRO PRO+","type":"Q_DEVELOPER_STANDALONE_PRO_PLUS"},
 			"usageBreakdownList": [{
-				"currency":"USD",
-				"currentOveragesWithPrecision":2,
 				"currentUsageWithPrecision":125,
 				"freeTrialInfo":{
 					"currentUsageWithPrecision":25,
@@ -186,7 +183,6 @@ func TestAccountUsageService_GetUsage_KiroMapsCredits(t *testing.T) {
 					"usageLimitWithPrecision":500
 				},
 				"nextDateReset": ` + strconv.FormatInt(resetAt, 10) + `,
-				"overageCharges":0.08,
 				"resourceType":"CREDIT",
 				"usageLimitWithPrecision":2000
 			}]
@@ -204,7 +200,6 @@ func TestAccountUsageService_GetUsage_KiroMapsCredits(t *testing.T) {
 	require.Equal(t, "active", usage.Source)
 	require.Equal(t, "KIRO PRO+", usage.KiroSubscriptionName)
 	require.Equal(t, "Q_DEVELOPER_STANDALONE_PRO_PLUS", usage.KiroSubscriptionType)
-	require.True(t, usage.KiroOveragesEnabled)
 	require.NotNil(t, usage.KiroCredit)
 	require.Equal(t, 125.0, usage.KiroCredit.CurrentUsage)
 	require.Equal(t, 2000.0, usage.KiroCredit.UsageLimit)
@@ -212,14 +207,8 @@ func TestAccountUsageService_GetUsage_KiroMapsCredits(t *testing.T) {
 	require.NotNil(t, usage.KiroBonus)
 	require.Equal(t, 25.0, usage.KiroBonus.CurrentUsage)
 	require.Equal(t, 500.0, usage.KiroBonus.UsageLimit)
-	require.NotNil(t, usage.KiroOverage)
-	require.Equal(t, "$", usage.KiroOverage.CurrencySymbol)
-	require.Equal(t, 2.0, usage.KiroOverage.CurrentOverages)
-	require.Equal(t, 0.08, usage.KiroOverage.OverageCharges)
 	require.NotNil(t, usage.KiroResetAt)
-	require.Equal(t, kiroQuotaStateOverageActive, usage.KiroQuotaState)
-	require.Equal(t, "overages_enabled", usage.KiroQuotaReason)
-	require.NotNil(t, usage.KiroQuotaResetAt)
+	require.Equal(t, kiroQuotaStateNormal, usage.KiroQuotaState)
 }
 
 func TestAccountUsageService_GetUsage_KiroUsesTokenProviderAccessToken(t *testing.T) {
@@ -674,17 +663,6 @@ func TestBuildKiroDegradedUsage_ClassifiesProfileError(t *testing.T) {
 	require.False(t, info.NeedsReauth)
 }
 
-func TestBuildKiroDegradedUsage_ClassifiesOverageExhausted(t *testing.T) {
-	info := buildKiroDegradedUsage(&kiroUsageHTTPError{
-		StatusCode: http.StatusTooManyRequests,
-		Body:       `{"message":"overage exhausted for this billing window"}`,
-	})
-
-	require.Equal(t, errorCodeNetworkError, info.ErrorCode)
-	require.Equal(t, kiroQuotaStateOverageExhausted, info.KiroQuotaState)
-	require.Contains(t, info.KiroQuotaReason, "overage exhausted")
-}
-
 func TestAccountUsageService_GetUsage_KiroCachesErrorSnapshotWhenRefreshFailsWithoutPriorSuccess(t *testing.T) {
 	account := Account{
 		ID:       708,
@@ -722,18 +700,14 @@ func TestAccountUsageService_GetUsage_KiroCachesErrorSnapshotWhenRefreshFailsWit
 	require.Equal(t, 1, requestCount)
 }
 
-func TestMapKiroUsageToInfo_CreditsExhaustedWithoutOverages(t *testing.T) {
+func TestMapKiroUsageToInfo_CreditsExhausted(t *testing.T) {
 	info := mapKiroUsageToInfo(&kiroUsageLimitsResponse{
 		NextDateReset: "2099-03-13T12:00:00Z",
-		OverageConfiguration: kiroOverageConfiguration{
-			OverageStatus: "DISABLED",
-		},
 		UsageBreakdownList: []kiroUsageBreakdown{
 			{
-				ResourceType:                 "CREDIT",
-				CurrentUsageWithPrecision:    kiroFloatPtr(2000),
-				UsageLimitWithPrecision:      kiroFloatPtr(2000),
-				CurrentOveragesWithPrecision: kiroFloatPtr(0),
+				ResourceType:              "CREDIT",
+				CurrentUsageWithPrecision: kiroFloatPtr(2000),
+				UsageLimitWithPrecision:   kiroFloatPtr(2000),
 			},
 		},
 	})
@@ -785,13 +759,9 @@ func TestAccountUsageService_EnrichAccountWithKiroRuntimeStateIncludesCachedQuot
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"nextDateReset":"2099-03-13T12:00:00Z",
-			"overageConfiguration":{"overageStatus":"ENABLED"},
 			"subscriptionInfo": {"subscriptionTitle":"KIRO PRO+"},
 			"usageBreakdownList": [{
-				"currency":"USD",
 				"currentUsageWithPrecision":2000,
-				"currentOveragesWithPrecision":4,
-				"overageCharges":0.2,
 				"usageLimitWithPrecision":2000,
 				"resourceType":"CREDIT"
 			}]
@@ -814,7 +784,7 @@ func TestAccountUsageService_EnrichAccountWithKiroRuntimeStateIncludesCachedQuot
 	}
 	svc.EnrichAccountWithKiroRuntimeState(context.Background(), target)
 
-	require.Equal(t, kiroQuotaStateOverageActive, target.KiroQuotaState)
-	require.Equal(t, "overages_enabled", target.KiroQuotaReason)
+	require.Equal(t, kiroQuotaStateCreditsExhausted, target.KiroQuotaState)
+	require.Equal(t, "credits_exhausted", target.KiroQuotaReason)
 	require.NotNil(t, target.KiroQuotaResetAt)
 }

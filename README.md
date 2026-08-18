@@ -32,7 +32,7 @@ Please read the following carefully before using this project:
 - **Telegram**: [Join the group](https://t.me/+Pv3T6ncordwxOTZl)
 - **WeChat**: scan the QR code below
 
-<img src="https://github.com/user-attachments/assets/b69ec6f3-1757-4da2-83ed-d420c95981be" alt="WeChat group QR code" width="280">
+<img src="https://github.com/user-attachments/assets/8f2542ce-eda7-49d4-9520-e5f46d9d4bda" alt="WeChat group QR code" width="280">
 
 ## Overview
 

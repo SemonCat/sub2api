@@ -31,7 +31,7 @@
       </span>
     </div>
     <!-- Row 2: Plan type + Privacy mode (only if either exists) -->
-    <div v-if="planLabel || privacyBadge || overagesBadge" class="inline-flex items-center overflow-hidden rounded-md">
+    <div v-if="planLabel || privacyBadge" class="inline-flex items-center overflow-hidden rounded-md">
       <span v-if="planLabel" :class="['inline-flex items-center gap-1 px-1.5 py-1', planBadgeClass]">
         <GrokFreeIcon
           v-if="isGrokFreePlan"
@@ -45,14 +45,6 @@
           aria-hidden="true"
         />
         <span>{{ planLabel }}</span>
-      </span>
-      <span
-        v-if="overagesBadge"
-        :class="['inline-flex items-center gap-1 px-1.5 py-1', overagesBadge.class]"
-        :title="overagesBadge.title"
-      >
-        <Icon name="sparkles" size="xs" />
-        <span>{{ overagesBadge.label }}</span>
       </span>
       <span
         v-if="privacyBadge"
@@ -87,7 +79,6 @@ interface Props {
   type: AccountType
   authMode?: string
   planType?: string
-  overagesEnabled?: boolean
   privacyMode?: string
   subscriptionExpiresAt?: string
 }
@@ -258,15 +249,6 @@ const planBadgeClass = computed(() => {
     return 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
   }
   return typeClass.value
-})
-
-const overagesBadge = computed(() => {
-  if (props.platform !== 'kiro' || !props.overagesEnabled) return null
-  return {
-    label: t('admin.accounts.status.overageActive'),
-    title: t('admin.accounts.usageWindow.kiroOverage'),
-    class: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-  }
 })
 
 // Subscription expiration label (non-free only)

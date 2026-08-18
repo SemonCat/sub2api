@@ -203,8 +203,30 @@ func scaleKiroCacheTokens(tokens int, ratio float64) int {
 }
 
 type kiroCacheProfile struct {
-	totalInputTokens              int
-	minCacheable                  int
+	totalInputTokens int
+	minCacheable     int
+	// scaleBreakpointsToInputTokens 决定断点累计值是否归一化到 totalInputTokens 所在的
+	// token 空间，三条协议路径都必须置为 true。
+	//
+	// 两侧计数口径本就不同：断点累计值由 countKiroMessageContentTokens 逐块累加，只统计
+	// text/thinking 正文；而 totalInputTokens 来自 countKiroInputTokensFromPayload，统计
+	// 的是整个 messages 的序列化 JSON，并额外计入每消息 kiroTokensPerMessage、每工具
+	// kiroTokensPerTool。后者天然包含 JSON 结构开销（字段名、role 包装、转义、tool_use 的
+	// id/name），前者对这些一律计 0。
+	//
+	// 因为 InputTokens = totalInputTokens - CacheRead - CacheCreation（见
+	// prepareKiroCacheEmulationPlanFromProfile），不归一化就等于让分子分母各用一套口径，
+	// cache_read 被系统性低估：tool_use / tool_result 密集的 Claude Code 流量里缺口可达
+	// 25%~45%，即使前缀完全命中，cache_read/totalInputTokens 也只能到 55%~75%。
+	//
+	// 归一化后最后一个可缓存断点恰好映射为 totalInputTokens，靠前断点按累计占比等比缩放。
+	// 这依赖「最后一个可缓存断点落在最后一个块上」，三条路径各有保证：
+	//   - responses / chat_completions：applyKiroDefaultBreakpoints 显式在末块放断点。
+	//   - Anthropic 且客户端下发了 cache_control：buildKiroCacheProfileFromBlocks 的消息边界
+	//     断点传播（一旦出现任一 cache_control，其后每个消息末尾都会补断点，而消息块恒排在
+	//     tools/system 之后）。
+	//   - Anthropic 且客户端未下发：buildKiroCacheProfile 的兜底同样走
+	//     applyKiroDefaultBreakpoints。
 	scaleBreakpointsToInputTokens bool
 	blocks                        []kiroCacheBlock
 	breakpoints                   []kiroCacheBreakpoint
@@ -243,6 +265,18 @@ func buildKiroCacheProfile(ctx context.Context, body []byte, model string, input
 	if len(blocks) == 0 {
 		return nil, false
 	}
+	// 客户端未下发任何 cache_control 时兜底补断点。
+	//
+	// Anthropic 路径的断点原本完全依赖客户端：无 cache_control ⇒ 无断点 ⇒
+	// lastCacheableBreakpoint 为 nil ⇒ buildKiroCacheProfileFromBlocks 返回 false ⇒ usage
+	// 为 nil，该请求零 cache_read 却仍计入命中率分母。Claude Code 会下发，但 curl、
+	// Cherry Studio 等 OpenAI 风格客户端普遍不发，这批流量是纯粹的分母污染。
+	//
+	// 只在「完全没有客户端断点」时兜底，不与客户端断点混用：若客户端已标注，额外补断点等于
+	// 在真实 API 不会缓存的位置模拟出 cache_read，会高估命中率、少计费。
+	if !hasKiroClientCacheBreakpoint(blocks) {
+		applyKiroDefaultBreakpoints(blocks, kiroCacheDefaultTTL)
+	}
 	totalTokens := inputTokens
 	if totalTokens <= 0 {
 		totalTokens = countKiroInputTokensFromPayload(ctx, payload)
@@ -251,7 +285,12 @@ func buildKiroCacheProfile(ctx context.Context, body []byte, model string, input
 		"model":       payload["model"],
 		"tool_choice": payload["tool_choice"],
 	}
-	return buildKiroCacheProfileFromBlocks(model, totalTokens, prelude, blocks)
+	profile, ok := buildKiroCacheProfileFromBlocks(model, totalTokens, prelude, blocks)
+	if ok {
+		// 与 responses / chat_completions 路径对齐，理由见 scaleBreakpointsToInputTokens。
+		profile.scaleBreakpointsToInputTokens = true
+	}
+	return profile, ok
 }
 
 func buildKiroResponsesCacheProfile(ctx context.Context, body []byte, model string, inputTokens int) (*kiroCacheProfile, bool) {
@@ -268,7 +307,7 @@ func buildKiroResponsesCacheProfile(ctx context.Context, body []byte, model stri
 		return nil, false
 	}
 	ttl := kiroCacheDefaultTTL
-	applyKiroResponsesDefaultBreakpoints(blocks, ttl)
+	applyKiroDefaultBreakpoints(blocks, ttl)
 
 	effectiveTools, err := apicompat.EffectiveResponsesTools(&req)
 	if err != nil {
@@ -308,7 +347,7 @@ func buildKiroChatCompletionsCacheProfile(ctx context.Context, body []byte, mode
 	if len(blocks) == 0 {
 		return nil, false
 	}
-	applyKiroResponsesDefaultBreakpoints(blocks, kiroCacheDefaultTTL)
+	applyKiroDefaultBreakpoints(blocks, kiroCacheDefaultTTL)
 
 	effectiveModel := strings.TrimSpace(model)
 	if effectiveModel == "" {
@@ -393,8 +432,24 @@ func flattenKiroCacheBlocks(ctx context.Context, payload map[string]any) []kiroP
 		for toolIndex, tool := range tools {
 			value := stripKiroCacheControl(tool)
 			blocks = append(blocks, kiroPendingBlock{
-				value:  map[string]any{"kind": "tool", "tool_index": toolIndex, "tool": value},
-				tokens: kiroTokensPerTool, breakpointTTL: extractKiroCacheTTL(tool),
+				value: map[string]any{"kind": "tool", "tool_index": toolIndex, "tool": value},
+				// 工具块按序列化后的真实 token 计数，不用 kiroTokensPerTool 拍平值。
+				//
+				// 真实 Claude Code 工具 schema 单个 300~1500 token，15 个工具实测约 21000，
+				// 而拍平估算只给 15*150=2250，低估约 9 倍。后果不是「命中率略低」而是
+				// 「整个 profile 被拒」：cacheableBreakpoints 用累计值与 minCacheable 比较，
+				// opus 系阈值 4096（见 kiroMinimumCacheableTokens，该值是被
+				// TestKiroMinimumCacheableTokens 钉死的显式契约，不应为此调低）。带 tools 的
+				// opus 短请求累计值卡在 2000 上下 → lastCacheableBreakpoint 为 nil →
+				// buildKiroCacheProfileFromBlocks 返回 false → 该请求零缓存，却仍然计入
+				// 命中率分母。
+				//
+				// 只改这里（B 侧）不动 countKiroInputTokensFromPayload 等计数器（T 侧）：
+				// P1 归一化后命中率 = B_matched/B_last，T 被约掉，所以修正 B 即可解决问题；
+				// 而 T 还喂给计费兜底与 count_tokens 对外契约，改动会牵连账单。两侧工具口径
+				// 因此不一致，但归一化把 B_last 精确映射到 T，该差异不会外泄。
+				tokens:        countKiroSerializedValueTokens(value),
+				breakpointTTL: extractKiroCacheTTL(tool),
 			})
 		}
 	}
@@ -567,7 +622,12 @@ func appendKiroChatCompletionsContentBlocks(ctx context.Context, blocks []kiroPe
 	return blocks
 }
 
-func applyKiroResponsesDefaultBreakpoints(blocks []kiroPendingBlock, ttl time.Duration) {
+// applyKiroDefaultBreakpoints 在每个消息末尾与最后一个块上放置断点。
+//
+// 注意它会无条件覆写 breakpointTTL。responses / chat_completions 是 OpenAI 形态、客户端
+// 不下发 cache_control，无值可覆盖；Anthropic 路径必须先用 hasKiroClientCacheBreakpoint
+// 判空后才可调用，否则会把客户端显式的 ttl:"1h" 降级成默认 5m。
+func applyKiroDefaultBreakpoints(blocks []kiroPendingBlock, ttl time.Duration) {
 	if len(blocks) == 0 {
 		return
 	}
@@ -577,6 +637,16 @@ func applyKiroResponsesDefaultBreakpoints(blocks []kiroPendingBlock, ttl time.Du
 		}
 	}
 	blocks[len(blocks)-1].breakpointTTL = &ttl
+}
+
+// hasKiroClientCacheBreakpoint 判断客户端是否下发了任何 cache_control 断点。
+func hasKiroClientCacheBreakpoint(blocks []kiroPendingBlock) bool {
+	for i := range blocks {
+		if blocks[i].breakpointTTL != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func countKiroResponsesCacheableInputItems(input []any) int {
@@ -816,6 +886,9 @@ func (t *kiroCacheTracker) compute(cacheKey uint64, profile *kiroCacheProfile) *
 			if !ok || !entry.expiresAt.After(now) {
 				continue
 			}
+			// 只续期命中的这一条即可：整条前缀链的续期由 commit() → update() 完成，
+			// 它会遍历当前 profile 的全部 cacheableBreakpoints 并推后 expiresAt，而命中点
+			// 之前的断点都属于当前 profile。此处再遍历一遍是冗余的。
 			entry.expiresAt = now.Add(entry.ttl)
 			accountEntries[candidate.prefixFingerprint] = entry
 			matchedTokens = profile.cacheTokensForBreakpoint(breakpoint.cumulativeTokens)
@@ -902,13 +975,32 @@ func (t *kiroCacheTracker) pruneLocked(now time.Time) {
 	}
 }
 
+// kiroCacheCredentialKey 返回模拟缓存 tracker 的一级命名空间键，按账号维度隔离。
+//
+// 这里必须用 account.ID，不能用凭证内容拼接，也不能用 kiropkg.BuildAccountKey：
+//   - refresh_token 会轮转。上游返回非空即覆盖写回（见 pkg/kiro/oauth.go 的 RefreshToken
+//     与 KiroOAuthService.BuildAccountCredentials），刷新窗口 kiroRefreshWindow=15min、
+//     access_token 典型 1h 有效，即每小时至少一次。凭证一旦参与计算，键就随之改变，该账号
+//     已积累的全部前缀指纹一次性作废、退回冷启动，命中率被反复打回。
+//   - client_id_hash / client_id 是「OAuth 客户端应用」标识，同一应用注册被多账号共用，
+//     会大量重复。用它做键（BuildAccountKey 的优先级短路正是先取它）会把不同账号合并进
+//     同一命名空间，产生跨账号误命中：cache_read 按 1/10 价计费而上游实际全价，属少计费，
+//     比冷启动严重得多。
+//
+// account.ID 同时满足三个必要属性：轮转时稳定、账号间唯一、恒定存在。调用方
+// prepareKiroCacheEmulationPlanFromProfile 及三个 prepare 入口均已前置校验 account.ID > 0，
+// 故此处无需兜底分支。
+//
+// 取舍：同一上游账号若被导入成两行 accounts 记录，两者不再共享缓存，会多算一次
+// cache_creation、少算 cache_read——偏保守（多计费），方向上优于误命中导致的少计费。
 func kiroCacheCredentialKey(account *Account) uint64 {
-	stableKey := strings.TrimSpace(kiroCacheCredentialIdentity(account))
-	if stableKey == "" {
+	if account == nil || account.ID <= 0 {
 		return 0
 	}
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(stableKey))
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(account.ID))
+	_, _ = h.Write(buf[:])
 	return h.Sum64()
 }
 

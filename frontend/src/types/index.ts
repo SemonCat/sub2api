@@ -1309,13 +1309,6 @@ export interface KiroCreditProgress {
   expiry_date?: string | null
 }
 
-export interface KiroOverageInfo {
-  current_overages: number
-  overage_charges: number
-  currency_code?: string
-  currency_symbol?: string
-}
-
 export interface GrokQuotaWindow {
   limit?: number | null
   remaining?: number | null
@@ -1398,10 +1391,8 @@ export interface AccountUsageInfo {
   kiro_subscription_name?: string | null
   kiro_subscription_type?: string | null
   kiro_reset_at?: string | null
-  kiro_overages_enabled?: boolean
   kiro_credit?: KiroCreditProgress | null
   kiro_bonus?: KiroCreditProgress | null
-  kiro_overage?: KiroOverageInfo | null
   kiro_quota_state?: string | null
   kiro_quota_reason?: string | null
   kiro_quota_reset_at?: string | null

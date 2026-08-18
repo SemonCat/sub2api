@@ -307,7 +307,7 @@ describe('admin AccountsView — 账号行展示', () => {
     wrapper.unmount()
   })
 
-  it('passes OpenAI auth mode and Kiro overages state to platform badges', async () => {
+  it('passes OpenAI auth mode to platform badges', async () => {
     listAccounts.mockResolvedValue({
       items: [
         {
@@ -316,16 +316,9 @@ describe('admin AccountsView — 账号行展示', () => {
           platform: 'openai',
           type: 'oauth',
           credentials: { auth_mode: 'agent_identity' }
-        },
-        {
-          id: 302,
-          name: 'kiro-overages',
-          platform: 'kiro',
-          type: 'oauth',
-          credentials: { kiro_overages_enabled: true }
         }
       ],
-      total: 2,
+      total: 1,
       page: 1,
       page_size: 20,
       pages: 1
@@ -336,10 +329,7 @@ describe('admin AccountsView — 账号行展示', () => {
 
     const badges = wrapper.findAllComponents(PlatformTypeBadge)
     const openAIBadge = badges.find((badge) => badge.props('platform') === 'openai')
-    const kiroBadge = badges.find((badge) => badge.props('platform') === 'kiro')
-
     expect(openAIBadge?.props('authMode')).toBe('agent_identity')
-    expect(kiroBadge?.props('overagesEnabled')).toBe(true)
 
     wrapper.unmount()
   })

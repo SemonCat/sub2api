@@ -91,10 +91,6 @@ admin.accounts.oauth.kiro.tokenJsonRequired
 admin.accounts.platforms.kiro
 admin.accounts.stats.approxCost
 admin.accounts.stats.kiroCredits
-admin.accounts.status.overageActive
-admin.accounts.status.overageActiveUntil
-admin.accounts.status.overageExhausted
-admin.accounts.status.overageExhaustedUntil
 admin.accounts.types.kiroApikey
 admin.accounts.types.kiroApikeyRelay
 admin.accounts.types.kiroOauth
@@ -102,7 +98,6 @@ admin.accounts.usageWindow.kiroBonus
 admin.accounts.usageWindow.kiroCredits
 admin.accounts.usageWindow.kiroDaysLeft
 admin.accounts.usageWindow.kiroExpires
-admin.accounts.usageWindow.kiroOverage
 admin.accounts.usageWindow.kiroReset
 admin.channels.form.fillDefaultModels
 admin.channels.form.fillDefaultModelsAlreadyConfigured
@@ -133,8 +128,8 @@ home.providers.kiro
 `.trim().split(/\s+/)
 
 const expectedHashes = {
-  en: '062905f2470a660dc933565a5f819002d3928b3e372e9213367b4f70acb449b7',
-  zh: '351e7d9ed989d2d675bffefc8515a34902affb57f30795eb1f96b3baa70f4988',
+  en: '644f5a0a96f5861af65705b2aed46d97e9b242a7cebdfc8cedb325efb6e57ef1',
+  zh: 'fb0b532d1fd2f4fcaf18bcfc0055eafd832a05538b1c0c8b204399e021a73e4e',
 }
 
 function localeValue(locale: Record<string, unknown>, key: string): unknown {
@@ -157,7 +152,7 @@ describe.each([
   ['zh', zh, expectedHashes.zh],
 ] as const)('fork locale preservation: %s', (_name, locale, expectedHash) => {
   it('keeps every fork-added key', () => {
-    expect(preservedForkKeys).toHaveLength(124)
+    expect(preservedForkKeys).toHaveLength(119)
     expect(preservedForkKeys.filter((key) => localeValue(locale, key) === undefined)).toEqual([])
   })
 

@@ -166,10 +166,6 @@ export default {
         creditsExhaustedUntil: 'AI Credits exhausted, expected recovery at {time}',
         overloadedUntil: 'Overloaded until {time}',
         viewTempUnschedDetails: 'View temp unschedulable details',
-        overageActive: 'Overage',
-        overageActiveUntil: 'Using overage until the reset window at {time}',
-        overageExhausted: 'Overage Exhausted',
-        overageExhaustedUntil: 'Overage exhausted, expected recovery at {time}',
         tempUnschedulableUntil: 'Resumes {time}'
       },
       columns: {
@@ -597,10 +593,10 @@ export default {
         codexCLIOnlyAppServerDesc:
           "Effective only when the switch above is on. When enabled, this account also allows third-party clients that embed the Codex engine over the app-server protocol (e.g. Claude Code's codex plugin); they still pass the global engine-fingerprint gate. OR-combined with the global app-server toggle.",
         codexFingerprintMode: 'Codex fingerprint convergence',
-        codexFingerprintModeDesc: 'When multiple users share the same OAuth account, converge device/session identifiers to account-level stable values to reduce upstream-visible device and session count. Off = pass through client identifiers as-is.',
-        codexFingerprintOff: 'Off (passthrough)',
+        codexFingerprintModeDesc: 'When multiple users share the same OAuth account, converge device/session identifiers to account-level stable values to reduce upstream-visible device and session count. Off by default (client identifiers pass through as-is); opt in explicitly when needed. Some accounts reported quota shrinkage after enabling convergence, so choose based on your own measurements.',
+        codexFingerprintOff: 'Off (passthrough, default)',
         codexFingerprintDevice: 'Device only',
-        codexFingerprintSession: 'Device + Session (recommended)',
+        codexFingerprintSession: 'Device + Session',
         codexFingerprintFull: 'Full convergence',
         codexImageTool: 'Codex image bridge policy',
         codexImageToolDesc:
@@ -1559,7 +1555,6 @@ export default {
         kiroCredits: 'Credits',
         kiroDaysLeft: '{days}d left',
         kiroExpires: 'Expires',
-        kiroOverage: 'Overage',
         kiroReset: 'Reset'
       },
       openaiQuotaReset: {

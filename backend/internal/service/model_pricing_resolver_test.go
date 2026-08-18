@@ -286,10 +286,10 @@ func TestResolve_KiroGPT56FallsBackToDefaultOpenAIPricingWhenNoChannelPrice(t *t
 	require.Equal(t, BillingModeToken, resolved.Mode)
 	require.Equal(t, PricingSourceLiteLLM, resolved.Source)
 	require.NotNil(t, resolved.BasePricing)
-	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
-	require.InDelta(t, 6e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
-	require.InDelta(t, 1.25e-6, resolved.BasePricing.CacheCreationPricePerToken, 1e-12)
-	require.InDelta(t, 0.1e-6, resolved.BasePricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 0.2e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 1.2e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.25e-6, resolved.BasePricing.CacheCreationPricePerToken, 1e-12)
+	require.InDelta(t, 0.02e-6, resolved.BasePricing.CacheReadPricePerToken, 1e-12)
 }
 
 func TestResolve_WithChannelOverride_TokenFlat(t *testing.T) {

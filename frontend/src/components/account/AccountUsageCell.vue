@@ -532,7 +532,7 @@
       </div>
     </template>
 
-    <!-- Kiro platform: show credits + bonus + overage summary (仅直连 AWS;外部中转账号不展示 credits) -->
+    <!-- Kiro platform: show credits + bonus (仅直连 AWS;外部中转账号不展示 credits) -->
     <template v-else-if="isKiroUsageAccount">
       <div v-if="loading" class="space-y-1.5">
         <div class="h-4 w-24 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
@@ -589,9 +589,6 @@
           <span v-if="kiroResetDisplay" class="inline-flex items-center gap-1">
             <span class="text-gray-400 dark:text-gray-500">{{ t('admin.accounts.usageWindow.kiroReset') }}</span>
             <span class="font-medium tabular-nums text-gray-600 dark:text-gray-300">{{ kiroResetDisplay }}</span>
-          </span>
-          <span v-if="kiroOverageSummary" class="inline-flex items-center gap-1 font-medium">
-            {{ kiroOverageSummary }}
           </span>
         </div>
         <div class="flex items-center gap-1.5 mt-0.5">
@@ -747,7 +744,7 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  kiroUsageMeta: [meta: { plan_type?: string; kiro_overages_enabled: boolean }]
+  kiroUsageMeta: [meta: { plan_type?: string }]
   'account-updated': [account: Account]
   'usage-loaded': [usage: AccountUsageInfo]
 }>()
@@ -1412,9 +1409,7 @@ const kiroUsageAvailable = computed(() => {
   return !!(
     usageInfo.value?.kiro_credit ||
     usageInfo.value?.kiro_bonus ||
-    usageInfo.value?.kiro_overage ||
-    usageInfo.value?.kiro_reset_at ||
-    usageInfo.value?.kiro_overages_enabled
+    usageInfo.value?.kiro_reset_at
   )
 })
 
@@ -1428,8 +1423,7 @@ const syncKiroUsageMeta = (info?: AccountUsageInfo | null) => {
   ).trim()
 
   emit('kiroUsageMeta', {
-    ...(planType ? { plan_type: planType } : {}),
-    kiro_overages_enabled: info?.kiro_overages_enabled === true
+    ...(planType ? { plan_type: planType } : {})
   })
 }
 
@@ -1511,9 +1505,7 @@ const kiroStatusBadgeLabel = computed(() => {
   if (usageInfo.value?.needs_reauth) return t('admin.accounts.needsReauth')
   if (isKiroProfileError.value) return t('admin.accounts.usageError')
   if (isKiroUsageForbidden.value) return t('admin.accounts.forbidden')
-  if (kiroQuotaState.value === 'overage_active') return t('admin.accounts.status.overageActive')
   if (kiroQuotaState.value === 'credits_exhausted') return t('admin.accounts.status.creditsExhausted')
-  if (kiroQuotaState.value === 'overage_exhausted') return t('admin.accounts.status.overageExhausted')
   return ''
 })
 
@@ -1524,8 +1516,7 @@ const kiroStatusToneClass = computed(() => {
   if (usageInfo.value?.needs_reauth) return 'text-orange-700 dark:text-orange-300'
   if (isKiroProfileError.value) return 'text-yellow-700 dark:text-yellow-300'
   if (isKiroUsageForbidden.value) return 'text-rose-700 dark:text-rose-300'
-  if (kiroQuotaState.value === 'overage_active') return 'text-amber-700 dark:text-amber-300'
-  if (kiroQuotaState.value === 'credits_exhausted' || kiroQuotaState.value === 'overage_exhausted') {
+  if (kiroQuotaState.value === 'credits_exhausted') {
     return 'text-red-700 dark:text-red-300'
   }
   return 'text-gray-600 dark:text-gray-300'
@@ -1539,28 +1530,7 @@ const kiroStatusHint = computed(() => {
   if (kiroQuotaState.value === 'credits_exhausted' && kiroQuotaResetDisplay.value) {
     return t('admin.accounts.status.creditsExhaustedUntil', { time: kiroQuotaResetDisplay.value })
   }
-  if (kiroQuotaState.value === 'overage_exhausted' && kiroQuotaResetDisplay.value) {
-    return t('admin.accounts.status.overageExhaustedUntil', { time: kiroQuotaResetDisplay.value })
-  }
   return ''
-})
-
-const kiroOverageSummary = computed(() => {
-  const overage = usageInfo.value?.kiro_overage
-  if (!overage) return ''
-  const hasOverageCount = (overage.current_overages ?? 0) > 0
-  const hasCharges = (overage.overage_charges ?? 0) > 0
-  if (!hasOverageCount && !hasCharges) return ''
-
-  const parts: string[] = [t('admin.accounts.usageWindow.kiroOverage')]
-  if (hasOverageCount) {
-    parts.push(formatKiroAmount(overage.current_overages))
-  }
-  if (hasCharges) {
-    const symbol = overage.currency_symbol || overage.currency_code || ''
-    parts.push(`(${symbol}${(overage.overage_charges ?? 0).toFixed(2)})`)
-  }
-  return parts.join(' ')
 })
 
 const requestParentBatchUsage = (options?: { force?: boolean }) => {

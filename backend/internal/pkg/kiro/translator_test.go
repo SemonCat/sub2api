@@ -34,6 +34,78 @@ func TestBuildRuntimeUserAgentStable(t *testing.T) {
 	require.Contains(t, amzUA, machineID)
 }
 
+func TestKiroResponseBrandComesFromUpstreamModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{model: "claude-sonnet-4.6", want: "Claude"},
+		{model: "gpt-5.6-sol", want: "Codex"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			result, err := BuildKiroPayloadWithRequestModel(
+				[]byte(`{"model":"custom-model-alias","messages":[{"role":"user","content":"hi"}]}`),
+				tt.model, "custom-model-alias", "", "AI_EDITOR", nil,
+			)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, result.Context.ResponseBrand)
+		})
+	}
+}
+
+func TestParseNonStreamingEventStreamRebrandsResponseStrings(t *testing.T) {
+	tests := []struct {
+		name  string
+		brand string
+	}{
+		{name: "claude", brand: "Claude"},
+		{name: "gpt", brand: "Codex"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := bytes.NewBuffer(nil)
+			_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+				"assistantResponseEvent": map[string]any{"content": "Kiro response"},
+			}))
+			_, _ = stream.Write(buildEventStreamFrame(t, "toolUseEvent", map[string]any{
+				"toolUseEvent": map[string]any{
+					"toolUseId": "toolu_brand",
+					"name":      "custom_tool",
+					"input":     `{"message":"Kiro","nested":["from Kiro"]}`,
+					"stop":      true,
+				},
+			}))
+
+			result, err := ParseNonStreamingEventStreamWithContext(stream, "custom-model-alias", KiroRequestContext{ResponseBrand: tt.brand})
+			require.NoError(t, err)
+			require.Equal(t, tt.brand+" response", gjson.GetBytes(result.ResponseBody, "content.0.text").String())
+			require.Equal(t, tt.brand, gjson.GetBytes(result.ResponseBody, "content.1.input.message").String())
+			require.Equal(t, "from "+tt.brand, gjson.GetBytes(result.ResponseBody, "content.1.input.nested.0").String())
+			require.NotContains(t, string(result.ResponseBody), "Kiro")
+		})
+	}
+}
+
+func TestStreamEventStreamRebrandsAcrossEventBoundaries(t *testing.T) {
+	stream := bytes.NewBuffer(nil)
+	for _, content := range []string{"Ki", "ro says K", "iro"} {
+		_, _ = stream.Write(buildEventStreamFrame(t, "assistantResponseEvent", map[string]any{
+			"assistantResponseEvent": map[string]any{"content": content},
+		}))
+	}
+
+	var out bytes.Buffer
+	_, err := StreamEventStreamAsAnthropicWithContext(
+		context.Background(), stream, &out, "custom-model-alias", 1, KiroRequestContext{ResponseBrand: "Codex"},
+	)
+	require.NoError(t, err)
+	require.NotContains(t, out.String(), "Kiro")
+	require.Equal(t, 2, strings.Count(out.String(), "Codex"))
+}
+
 func TestBuildKiroPayloadBasic(t *testing.T) {
 	SetCachedWebSearchDescription("")
 	body := []byte(`{
@@ -53,15 +125,13 @@ func TestBuildKiroPayloadBasic(t *testing.T) {
 	require.Equal(t, remoteWebSearchDescription, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.0.toolSpecification.description").String())
 	require.Equal(t, "hello kiro", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
 	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Contains(t, systemContent, "<CRITICAL_OVERRIDE>")
-	require.Contains(t, systemContent, "You must never say that you are Kiro")
 	require.Contains(t, systemContent, "<identity>")
-	require.Contains(t, systemContent, "If no identity is provided, say that you are Claude.")
-	require.Contains(t, systemContent, "You are Claude, a senior software engineer")
+	require.Contains(t, systemContent, "You are claude-sonnet-4-5, a senior software engineer")
+	require.NotContains(t, systemContent, "Kiro")
 	require.Contains(t, systemContent, "You are a test system prompt.")
 	require.NotContains(t, systemContent, "[Context: Current date is ")
 	require.NotContains(t, systemContent, "[Context: Current time is ")
-	require.Less(t, strings.Index(systemContent, "<CRITICAL_OVERRIDE>"), strings.Index(systemContent, "You are a test system prompt."))
+	require.Less(t, strings.Index(systemContent, "<identity>"), strings.Index(systemContent, "You are a test system prompt."))
 	require.Equal(t, "I will follow these instructions.", gjson.GetBytes(payload, "conversationState.history.1.assistantResponseMessage.content").String())
 }
 
@@ -307,8 +377,8 @@ func TestBuildKiroPayloadInjectsChunkedWritePolicyIntoSystemPrompt(t *testing.T)
 
 	systemContent := gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String()
 	require.Contains(t, systemContent, "<thinking_mode>enabled</thinking_mode>")
-	require.Less(t, strings.Index(systemContent, "<thinking_mode>enabled</thinking_mode>"), strings.Index(systemContent, "<CRITICAL_OVERRIDE>"))
-	require.Less(t, strings.Index(systemContent, "<CRITICAL_OVERRIDE>"), strings.Index(systemContent, "Follow user instructions."))
+	require.Less(t, strings.Index(systemContent, "<thinking_mode>enabled</thinking_mode>"), strings.Index(systemContent, "<identity>"))
+	require.Less(t, strings.Index(systemContent, "<identity>"), strings.Index(systemContent, "Follow user instructions."))
 	require.Contains(t, systemContent, "Follow user instructions.")
 	require.Contains(t, systemContent, systemChunkedWritePolicy)
 	require.Equal(t, 1, strings.Count(systemContent, systemChunkedWritePolicy))
@@ -348,7 +418,7 @@ func TestBuildKiroPayloadDoesNotInjectClaudeThinkingTagsForGPTModels(t *testing.
 	require.NoError(t, err)
 
 	systemContent := gjson.GetBytes(kiroBuildResult.Payload, "conversationState.history.0.userInputMessage.content").String()
-	require.Contains(t, systemContent, "You are Claude, a senior software engineer")
+	require.Contains(t, systemContent, "You are gpt-5.6-terra, a senior software engineer")
 	require.NotContains(t, systemContent, "<thinking_mode>")
 	require.NotContains(t, systemContent, "<max_thinking_length>")
 	require.NotContains(t, systemContent, "<thinking_effort>")
@@ -502,21 +572,21 @@ func TestBuildKiroPayloadEnablesImplicitThinkingTagStrippingForOpus47And48(t *te
 	}
 }
 
-// kiroBuiltinIdentityPrompt 中的 {{identity}} 占位符必须被实际身份替换,
-// 默认回退到 "Claude",避免模型直接复读模板字面量。
+// kiroBuiltinIdentityPrompt 中的 {{identity}} 占位符必须被映射前的模型名替换。
 func TestBuildKiroPayloadRendersBuiltinIdentityPlaceholder(t *testing.T) {
 	body := []byte(`{
-		"model":"claude-sonnet-4-5",
+		"model":"mapped-upstream-model",
 		"messages":[{"role":"user","content":"hi"}]
 	}`)
-	result, err := BuildKiroPayloadWithContext(body, "claude-sonnet-4.5", "", "AI_EDITOR", nil)
+	result, err := BuildKiroPayloadWithRequestModel(body, "mapped-upstream-model", "gpt-5.6-sol", "", "AI_EDITOR", nil)
 	require.NoError(t, err)
 
 	systemContent := gjson.GetBytes(result.Payload, "conversationState.history.0.userInputMessage.content").String()
 	require.NotContains(t, systemContent, "{{identity}}",
 		"placeholder must be rendered before sending to upstream")
-	require.Contains(t, systemContent, "You are Claude,",
-		"default identity should fall back to 'Claude'")
+	require.Contains(t, systemContent, "You are gpt-5.6-sol,")
+	require.NotContains(t, systemContent, "You are mapped-upstream-model,")
+	require.NotContains(t, systemContent, "Kiro")
 }
 
 func TestBuildKiroPayloadInjectsThinkingForThinkingAliasModel(t *testing.T) {

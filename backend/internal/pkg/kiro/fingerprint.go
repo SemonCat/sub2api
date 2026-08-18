@@ -8,9 +8,9 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -115,12 +115,7 @@ func goOSToNodePlatform(goos string) string {
 }
 
 func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, target)
 }
 
 func BuildAccountKey(clientID, clientIDHash, refreshToken, profileArn string, accountID int64) string {
@@ -257,18 +252,4 @@ func BuildLoginHeaders(accountKey, machineID string) map[string]string {
 		"User-Agent":   fmt.Sprintf("KiroIDE-%s-%s", fp.KiroVersion, fp.KiroHash),
 		"Accept":       "application/json, text/plain, */*",
 	}
-}
-
-func ExponentialBackoffWithJitter(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
-	if attempt < 0 {
-		attempt = 0
-	}
-	delay := baseDelay << attempt
-	if delay > maxDelay {
-		delay = maxDelay
-	}
-	const jitterFactor = 0.3
-	seed := rand.New(rand.NewSource(time.Now().UnixNano()))
-	jitter := 1 + ((seed.Float64()*2 - 1) * jitterFactor)
-	return time.Duration(float64(delay) * jitter)
 }

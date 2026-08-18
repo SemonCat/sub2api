@@ -14,7 +14,6 @@ const (
 	kiroErrorMonthlyRequest         = "monthly_request_count"
 	kiroErrorProfileError           = "profile_error"
 	kiroErrorQuotaExhausted         = "quota_exhausted"
-	kiroErrorOverageExhausted       = "overage_exhausted"
 	kiroErrorRateLimited            = "rate_limited"
 	kiroErrorSuspended              = "suspended"
 	kiroErrorUsageForbidden         = "usage_forbidden"
@@ -28,9 +27,7 @@ const (
 	kiroErrorRefreshTokenInvalid    = "refresh_token_invalid"
 
 	kiroQuotaStateNormal           = "normal"
-	kiroQuotaStateOverageActive    = "overage_active"
 	kiroQuotaStateCreditsExhausted = "credits_exhausted"
-	kiroQuotaStateOverageExhausted = "overage_exhausted"
 )
 
 type kiroErrorClassification struct {
@@ -56,8 +53,6 @@ func classifyKiroHTTPError(statusCode int, body string) kiroErrorClassification 
 		return classifyKiroBadRequest(trimmed, lower)
 	case statusCode == http.StatusForbidden && isKiroTokenErrorBody([]byte(trimmed)):
 		return kiroErrorClassification{Category: kiroErrorAuthError, StatusCode: statusCode, Message: trimmed}
-	case looksLikeKiroOverageExhaustedError(lower):
-		return kiroErrorClassification{Category: kiroErrorOverageExhausted, StatusCode: statusCode, Message: trimmed}
 	case looksLikeKiroQuotaExhaustedError(lower):
 		return kiroErrorClassification{Category: kiroErrorQuotaExhausted, StatusCode: statusCode, Message: trimmed}
 	case statusCode == http.StatusTooManyRequests:
@@ -90,8 +85,6 @@ func classifyKiroError(err error) kiroErrorClassification {
 		return kiroErrorClassification{Category: kiroErrorMonthlyRequest, Message: errStr}
 	case looksLikeKiroProfileError(lower):
 		return kiroErrorClassification{Category: kiroErrorProfileError, Message: errStr}
-	case looksLikeKiroOverageExhaustedError(lower):
-		return kiroErrorClassification{Category: kiroErrorOverageExhausted, Message: errStr}
 	case looksLikeKiroQuotaExhaustedError(lower):
 		return kiroErrorClassification{Category: kiroErrorQuotaExhausted, Message: errStr}
 	case strings.Contains(lower, "context deadline exceeded"),
@@ -202,18 +195,6 @@ func looksLikeKiroQuotaExhaustedError(lower string) bool {
 		(strings.Contains(lower, "quota") && (strings.Contains(lower, "exhaust") || strings.Contains(lower, "exceeded") || strings.Contains(lower, "depleted"))) ||
 		(strings.Contains(lower, "usage limit") && (strings.Contains(lower, "reached") || strings.Contains(lower, "exceeded"))) ||
 		(strings.Contains(lower, "resource has been exhausted"))
-}
-
-func looksLikeKiroOverageExhaustedError(lower string) bool {
-	if lower == "" {
-		return false
-	}
-	return strings.Contains(lower, "overage") &&
-		(strings.Contains(lower, "exhaust") ||
-			strings.Contains(lower, "disabled") ||
-			strings.Contains(lower, "not enabled") ||
-			strings.Contains(lower, "not allowed") ||
-			strings.Contains(lower, "limit"))
 }
 
 func isNetErr(err error) bool {
