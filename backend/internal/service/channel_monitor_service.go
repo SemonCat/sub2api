@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -77,6 +78,10 @@ type ChannelMonitorService struct {
 	// scheduler 由 wire 通过 SetScheduler 注入；CRUD 后调用对应钩子即时同步任务。
 	// 测试或未注入场景下保持 nil，所有钩子调用变为 no-op。
 	scheduler MonitorScheduler
+	// quotaFetcher 由 wire 通过 SetQuotaFetcher 注入（accountUsage/CN 服务在本服务
+	// 之后构造，构造参数注入会破坏既有依赖顺序）。nil 时 fail-closed：
+	// 配额模式的检测产出「未配置」错误快照，Create/Update 关联账号直接报错。
+	quotaFetcher *ChannelMonitorQuotaFetcher
 }
 
 const maxChannelMonitorNameRunes = 100
@@ -150,6 +155,13 @@ func (s *ChannelMonitorService) Create(ctx context.Context, p ChannelMonitorCrea
 	if err := validateExtraHeaders(p.ExtraHeaders); err != nil {
 		return nil, err
 	}
+	if err := s.validateLinkedAccount(ctx, p.Provider, p.AccountID); err != nil {
+		return nil, err
+	}
+	if err := s.validateLinkedGroup(ctx, p.Provider, p.GroupID); err != nil {
+		return nil, err
+	}
+	checkMode := defaultCheckMode(p.CheckMode)
 	encrypted, err := s.encryptor.Encrypt(p.APIKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt api key: %w", err)
@@ -160,7 +172,7 @@ func (s *ChannelMonitorService) Create(ctx context.Context, p ChannelMonitorCrea
 		APIMode:          defaultAPIMode(p.APIMode),
 		Endpoint:         normalizeEndpoint(p.Endpoint),
 		APIKey:           encrypted, // 注意：传入 repository 时该字段为密文
-		PrimaryModel:     normalizeMonitorPrimaryModel(p.Provider, p.PrimaryModel),
+		PrimaryModel:     normalizeMonitorPrimaryModel(p.Provider, checkMode, p.PrimaryModel),
 		ExtraModels:      normalizeModels(p.ExtraModels),
 		GroupName:        strings.TrimSpace(p.GroupName),
 		Enabled:          p.Enabled,
@@ -171,6 +183,9 @@ func (s *ChannelMonitorService) Create(ctx context.Context, p ChannelMonitorCrea
 		ExtraHeaders:     emptyHeadersIfNil(p.ExtraHeaders),
 		BodyOverrideMode: defaultBodyMode(p.BodyOverrideMode),
 		BodyOverride:     p.BodyOverride,
+		CheckMode:        checkMode,
+		AccountID:        cloneInt64Pointer(p.AccountID),
+		GroupID:          cloneInt64Pointer(p.GroupID),
 	}
 	if err := s.repo.Create(ctx, m); err != nil {
 		return nil, fmt.Errorf("create channel monitor: %w", err)
@@ -236,6 +251,9 @@ func (s *ChannelMonitorService) Duplicate(
 		ExtraHeaders:         cloneChannelMonitorHeaders(source.ExtraHeaders),
 		BodyOverrideMode:     source.BodyOverrideMode,
 		BodyOverride:         bodyOverride,
+		CheckMode:            defaultCheckMode(source.CheckMode),
+		AccountID:            cloneInt64Pointer(source.AccountID),
+		GroupID:              cloneInt64Pointer(source.GroupID),
 		DuplicateOperationID: operationID,
 	}
 	if err := s.repo.Create(ctx, duplicate); err != nil {
@@ -290,9 +308,20 @@ func (s *ChannelMonitorService) decryptAPIKeyForDuplicate(source *ChannelMonitor
 		return "", ErrChannelMonitorAPIKeyDecryptFailed
 	}
 	plain, err := s.encryptor.Decrypt(source.APIKey)
-	if err != nil || strings.TrimSpace(plain) == "" {
+	if err != nil {
 		slog.Warn("channel_monitor: decrypt api key for duplicate failed",
 			"monitor_id", source.ID, "error", err)
+		return "", ErrChannelMonitorAPIKeyDecryptFailed
+	}
+	// quota 模式明文为空串是合法状态（api_key_encrypted 存的是加密空串）：
+	// 重加密空串即可。若在此报错，克隆出的配额监控会被 runner 当作
+	// 解密失败而 Unschedule，静默停摆。
+	if strings.TrimSpace(plain) == "" {
+		if monitorCheckModeUsesQuota(defaultCheckMode(source.CheckMode)) {
+			return "", nil
+		}
+		slog.Warn("channel_monitor: decrypted api key for duplicate is empty",
+			"monitor_id", source.ID)
 		return "", ErrChannelMonitorAPIKeyDecryptFailed
 	}
 	return plain, nil
@@ -343,8 +372,14 @@ func cloneChannelMonitorJSONMap(source map[string]any) (map[string]any, error) {
 }
 
 // validateCreateParams 把 Create 入参的所有校验聚拢为一个函数，避免 Create 主体超过 30 行。
+// 按 check_mode 分支：probe 沿用 endpoint+api_key 必填；quota 只需关联账号；
+// quota_probe 两者皆需。
 func validateCreateParams(p ChannelMonitorCreateParams) error {
 	if err := validateProvider(p.Provider); err != nil {
+		return err
+	}
+	checkMode := defaultCheckMode(p.CheckMode)
+	if err := validateCheckMode(p.Provider, checkMode); err != nil {
 		return err
 	}
 	if err := validateAPIMode(p.Provider, p.APIMode); err != nil {
@@ -356,14 +391,69 @@ func validateCreateParams(p ChannelMonitorCreateParams) error {
 	if err := validateJitter(p.JitterSeconds, p.IntervalSeconds); err != nil {
 		return err
 	}
-	if err := validateEndpoint(p.Endpoint); err != nil {
-		return err
+	usesQuota := monitorCheckModeUsesQuota(checkMode)
+	// probe 分支（含 quota_probe 的探活部分）仍需 endpoint + api_key；
+	// quota 模式 endpoint/api_key 留空，避免要求用户填无意义的占位值。
+	if checkMode != MonitorCheckModeQuota {
+		if err := validateEndpoint(p.Endpoint); err != nil {
+			return err
+		}
+		if strings.TrimSpace(p.APIKey) == "" {
+			return ErrChannelMonitorMissingAPIKey
+		}
 	}
-	if strings.TrimSpace(p.APIKey) == "" {
-		return ErrChannelMonitorMissingAPIKey
+	hasAccount := p.AccountID != nil && *p.AccountID > 0
+	hasGroup := p.GroupID != nil && *p.GroupID > 0
+	if hasAccount && hasGroup {
+		return ErrChannelMonitorQuotaTargetConflict
 	}
-	if normalizeMonitorPrimaryModel(p.Provider, p.PrimaryModel) == "" {
+	if usesQuota && !hasAccount && !hasGroup {
+		return ErrChannelMonitorAccountRequired
+	}
+	if normalizeMonitorPrimaryModel(p.Provider, checkMode, p.PrimaryModel) == "" {
 		return ErrChannelMonitorMissingPrimaryModel
+	}
+	return nil
+}
+
+// validateLinkedAccount 校验关联账号存在、平台与监控 provider 一致、且能充当
+// 配额数据源（能力拦截，见 monitorAccountQuotaCapability）。
+// fetcher 未注入时 fail-closed（拒绝创建配额监控，而不是创建后静默坏）。
+func (s *ChannelMonitorService) validateLinkedAccount(ctx context.Context, provider string, accountID *int64) error {
+	if accountID == nil || *accountID <= 0 {
+		return nil
+	}
+	if s.quotaFetcher == nil {
+		return ErrChannelMonitorAccountRequired
+	}
+	account, err := s.quotaFetcher.LoadAccount(ctx, *accountID)
+	if err != nil || account == nil {
+		return ErrChannelMonitorAccountRequired
+	}
+	if account.Platform != provider {
+		return ErrChannelMonitorProviderIncompatible
+	}
+	return monitorAccountQuotaCapability(account)
+}
+
+// validateLinkedGroup 校验关联分组存在且平台与监控 provider 一致。
+// 不校验组内账号的配额能力：分组是动态集合（成员随时增删），逐个卡能力会让
+// 「组里混进一个 API-Key 型 openai 账号」直接阻断整个监控的创建；这类账号在
+// 聚合时会落到「未知」计数里，由 deriveGroupQuotaStatus 按「还有没有健康号」推导。
+// fetcher 未注入时 fail-closed（与 validateLinkedAccount 一致）。
+func (s *ChannelMonitorService) validateLinkedGroup(ctx context.Context, provider string, groupID *int64) error {
+	if groupID == nil || *groupID <= 0 {
+		return nil
+	}
+	if s.quotaFetcher == nil {
+		return ErrChannelMonitorAccountRequired
+	}
+	group, err := s.quotaFetcher.LoadGroup(ctx, *groupID)
+	if err != nil || group == nil {
+		return ErrChannelMonitorAccountRequired
+	}
+	if group.Platform != provider {
+		return ErrChannelMonitorGroupIncompatible
 	}
 	return nil
 }
@@ -382,6 +472,14 @@ func (s *ChannelMonitorService) Update(ctx context.Context, id int64, p ChannelM
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateProbeAPIKey(existing, newPlainAPIKey); err != nil {
+		return nil, err
+	}
+	if p.Provider != nil || p.CheckMode != nil || p.AccountID != nil || p.GroupID != nil {
+		if err := s.revalidateLinkedQuotaTarget(ctx, existing); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := s.repo.Update(ctx, existing); err != nil {
 		return nil, fmt.Errorf("update channel monitor: %w", err)
@@ -399,6 +497,126 @@ func (s *ChannelMonitorService) Update(ctx context.Context, id int64, p ChannelM
 		s.scheduler.Schedule(existing)
 	}
 	return existing, nil
+}
+
+// validateMonitorModeFields 校验 check_mode 与其它字段的组合约束
+// （在 provider/check_mode/account_id/group_id/endpoint 全部应用后调用）：
+//   - quota / quota_probe 必须恰好关联一个数据源（账号或分组）
+//   - probe / quota_probe 必须持有 endpoint（探活目标）
+func validateMonitorModeFields(m *ChannelMonitor) error {
+	checkMode := defaultCheckMode(m.CheckMode)
+	if m.AccountID != nil && m.GroupID != nil {
+		return ErrChannelMonitorQuotaTargetConflict
+	}
+	if monitorCheckModeUsesQuota(checkMode) && m.AccountID == nil && m.GroupID == nil {
+		return ErrChannelMonitorAccountRequired
+	}
+	if checkMode != MonitorCheckModeQuota && strings.TrimSpace(m.Endpoint) == "" {
+		return ErrChannelMonitorInvalidEndpoint
+	}
+	return nil
+}
+
+// validateProbeAPIKey 探活模式（probe / quota_probe）必须持有可用明文 key：
+// 存量密文解密为空串（quota 监控切回探活但未重填 key）时拒绝。
+// 密文损坏的情况交给既有 APIKeyDecryptFailed 链路（Get/RunCheck 会显式报错）。
+func (s *ChannelMonitorService) validateProbeAPIKey(m *ChannelMonitor, newPlainKey string) error {
+	if defaultCheckMode(m.CheckMode) == MonitorCheckModeQuota {
+		return nil
+	}
+	if strings.TrimSpace(newPlainKey) != "" {
+		return nil
+	}
+	if strings.TrimSpace(m.APIKey) == "" {
+		return ErrChannelMonitorMissingAPIKey
+	}
+	plain, err := s.encryptor.Decrypt(m.APIKey)
+	if err != nil {
+		return nil
+	}
+	if strings.TrimSpace(plain) == "" {
+		return ErrChannelMonitorMissingAPIKey
+	}
+	return nil
+}
+
+// revalidateLinkedQuotaTarget 在 provider/check_mode/account_id/group_id 任一
+// 变化后复核配额数据源，按绑定类型分派到账号或分组的复核逻辑。
+func (s *ChannelMonitorService) revalidateLinkedQuotaTarget(ctx context.Context, m *ChannelMonitor) error {
+	if m.GroupID != nil {
+		return s.revalidateLinkedGroup(ctx, m)
+	}
+	return s.revalidateLinkedAccount(ctx, m)
+}
+
+// revalidateLinkedGroup 复核关联分组：
+//   - 分组已被删除或平台失配：probe 模式自动解绑（静默修复），
+//     quota 模式显式报错（配额监控必须有可用数据源）
+func (s *ChannelMonitorService) revalidateLinkedGroup(ctx context.Context, m *ChannelMonitor) error {
+	usesQuota := monitorCheckModeUsesQuota(defaultCheckMode(m.CheckMode))
+	if s.quotaFetcher == nil {
+		if usesQuota {
+			return ErrChannelMonitorAccountRequired
+		}
+		m.GroupID = nil
+		return nil
+	}
+	group, err := s.quotaFetcher.LoadGroup(ctx, *m.GroupID)
+	if err != nil || group == nil {
+		if usesQuota {
+			return ErrChannelMonitorAccountRequired
+		}
+		m.GroupID = nil
+		return nil
+	}
+	if group.Platform != m.Provider {
+		if usesQuota {
+			return ErrChannelMonitorGroupIncompatible
+		}
+		m.GroupID = nil
+	}
+	return nil
+}
+
+// revalidateLinkedAccount 在 provider/check_mode/account_id 任一变化后复核关联账号：
+//   - 账号已被删除或平台失配：probe 模式自动解绑（静默修复），
+//     quota 模式显式报错（配额监控必须有可用数据源）
+func (s *ChannelMonitorService) revalidateLinkedAccount(ctx context.Context, m *ChannelMonitor) error {
+	usesQuota := monitorCheckModeUsesQuota(defaultCheckMode(m.CheckMode))
+	if m.AccountID == nil {
+		if usesQuota {
+			return ErrChannelMonitorAccountRequired
+		}
+		return nil
+	}
+	if s.quotaFetcher == nil {
+		return ErrChannelMonitorAccountRequired
+	}
+	account, err := s.quotaFetcher.LoadAccount(ctx, *m.AccountID)
+	if err != nil || account == nil {
+		if usesQuota {
+			return ErrChannelMonitorAccountRequired
+		}
+		m.AccountID = nil
+		return nil
+	}
+	if account.Platform != m.Provider {
+		if usesQuota {
+			return ErrChannelMonitorProviderIncompatible
+		}
+		m.AccountID = nil
+		return nil
+	}
+	// 能力失配（如 deepseek coding / zhipu payg / API-Key 型海外账号）：
+	// quota 模式显式报错（有该类存量监控时编辑会被拦，出路是换账号或切 probe），
+	// probe 模式账号无用途，静默解绑。
+	if err := monitorAccountQuotaCapability(account); err != nil {
+		if usesQuota {
+			return err
+		}
+		m.AccountID = nil
+	}
+	return nil
 }
 
 // applyAPIKeyUpdate 处理 Update 中的 APIKey 字段：
@@ -454,6 +672,9 @@ func (s *ChannelMonitorService) ListHistory(ctx context.Context, id int64, model
 // 写历史记录并更新 last_checked_at。返回每个模型的检测结果。
 // 仅当 channel_monitor_enabled=true 且 channel_monitor_mode=v1 时真正探测；
 // mode=v2 时返回 ErrChannelMonitorActiveProbesRetired，不产生上游流量。
+//
+// 按 check_mode 分派：probe（默认，现状探活）/ quota（仅查关联账号配额，
+// 零 LLM 成本）/ quota_probe（探活 + 配额快照挂主模型行）。
 func (s *ChannelMonitorService) RunCheck(ctx context.Context, id int64) ([]*CheckResult, error) {
 	rt := s.probeRuntime(ctx)
 	if !rt.Enabled {
@@ -466,12 +687,61 @@ func (s *ChannelMonitorService) RunCheck(ctx context.Context, id int64) ([]*Chec
 	if err != nil {
 		return nil, err
 	}
-	if m.APIKeyDecryptFailed {
+	checkMode := defaultCheckMode(m.CheckMode)
+	if checkMode != MonitorCheckModeQuota && m.APIKeyDecryptFailed {
 		return nil, ErrChannelMonitorAPIKeyDecryptFailed
 	}
-	results := s.runChecksConcurrent(ctx, m)
+
+	var results []*CheckResult
+	switch checkMode {
+	case MonitorCheckModeQuota:
+		results = s.runQuotaOnlyCheck(ctx, m)
+	case MonitorCheckModeQuotaProbe:
+		results = s.runChecksConcurrent(ctx, m)
+		attachQuotaSnapshot(results, s.fetchQuotaSnapshot(ctx, m))
+	default:
+		results = s.runChecksConcurrent(ctx, m)
+	}
 	s.persistCheckResults(ctx, m, results)
 	return results, nil
+}
+
+// runQuotaOnlyCheck quota 模式：一次配额抓取 → 单条 CheckResult
+// （Model=PrimaryModel，默认 "quota"；无 ping/latency，状态由快照推导）。
+func (s *ChannelMonitorService) runQuotaOnlyCheck(ctx context.Context, m *ChannelMonitor) []*CheckResult {
+	snapshot := s.fetchQuotaSnapshot(ctx, m)
+	res := deriveQuotaCheckResult(snapshot, m.PrimaryModel, time.Now())
+	res.Quota = snapshot
+	return []*CheckResult{res}
+}
+
+// fetchQuotaSnapshot 抓取配额数据源。数据源二选一：绑定分组时聚合组内全部
+// active 账号，否则读单个关联账号。未关联 / fetcher 未注入时返回显式错误快照
+// （不返回 error，保证检测周期与历史时间线连续）。
+func (s *ChannelMonitorService) fetchQuotaSnapshot(ctx context.Context, m *ChannelMonitor) *domain.MonitorQuotaSnapshot {
+	if s.quotaFetcher == nil {
+		return quotaErrorSnapshot("usage", "quota fetcher is not configured", time.Now())
+	}
+	if m.GroupID != nil {
+		return s.quotaFetcher.FetchGroup(ctx, *m.GroupID)
+	}
+	if m.AccountID == nil {
+		return quotaErrorSnapshot("usage", monitorQuotaErrAccountNotFound, time.Now())
+	}
+	return s.quotaFetcher.Fetch(ctx, *m.AccountID)
+}
+
+// attachQuotaSnapshot quota_probe：把配额快照挂到主模型行（results[0]）。
+// 配额失败不改变探活状态，仅在探活 message 为空时附注失败原因。
+func attachQuotaSnapshot(results []*CheckResult, snapshot *domain.MonitorQuotaSnapshot) {
+	if len(results) == 0 || snapshot == nil {
+		return
+	}
+	primary := results[0]
+	primary.Quota = snapshot
+	if !snapshot.Success && strings.TrimSpace(primary.Message) == "" {
+		primary.Message = truncateMessage("quota fetch failed: " + snapshot.Error)
+	}
 }
 
 // persistCheckResults 写入本次检测的历史记录并更新 last_checked_at。
@@ -487,6 +757,7 @@ func (s *ChannelMonitorService) persistCheckResults(ctx context.Context, m *Chan
 			PingLatencyMs: r.PingLatencyMs,
 			Message:       r.Message,
 			CheckedAt:     r.CheckedAt,
+			Quota:         r.Quota,
 		})
 	}
 	if err := s.repo.InsertHistoryBatch(ctx, rows); err != nil {
@@ -539,6 +810,14 @@ func (s *ChannelMonitorService) runChecksConcurrent(ctx context.Context, m *Chan
 // 通过 setter 注入避免 service ↔ runner 的依赖环。
 func (s *ChannelMonitorService) SetScheduler(sched MonitorScheduler) {
 	s.scheduler = sched
+}
+
+// SetQuotaFetcher 由 wire 注入配额抓取器（账号侧用量服务聚合）。
+func (s *ChannelMonitorService) SetQuotaFetcher(fetcher *ChannelMonitorQuotaFetcher) {
+	if s == nil {
+		return
+	}
+	s.quotaFetcher = fetcher
 }
 
 // ListEnabledMonitors 返回所有 enabled=true 的监控（解密后），供 runner 启动时建立任务表。
@@ -693,14 +972,53 @@ func applyMonitorUpdate(existing *ChannelMonitor, p ChannelMonitorUpdateParams) 
 		providerChanged = existing.Provider != *p.Provider
 		existing.Provider = *p.Provider
 	}
-	if p.Endpoint != nil {
-		if err := validateEndpoint(*p.Endpoint); err != nil {
+	if p.CheckMode != nil {
+		existing.CheckMode = defaultCheckMode(*p.CheckMode)
+	}
+	// provider 与 check_mode 任一变化后统一复核组合矩阵：provider-only 更新
+	// （如把 probe 监控的 provider 改成 antigravity）也不得落库非法组合，否则
+	// 运行期恒 error。条件限定避免把存量非法行的 name/enabled-only 更新也判死
+	// （否则连改名/停用都无法操作）。
+	if p.Provider != nil || p.CheckMode != nil {
+		if err := validateCheckMode(existing.Provider, defaultCheckMode(existing.CheckMode)); err != nil {
 			return err
+		}
+	}
+	// 数据源二选一：显式设置一个就隐式清空另一个，避免留下双绑的歧义状态
+	// （库层 CHECK 也会拒）。0 = 清空本项，此时不动另一项。
+	if p.AccountID != nil {
+		if *p.AccountID > 0 {
+			id := *p.AccountID
+			existing.AccountID = &id
+			existing.GroupID = nil
+		} else {
+			existing.AccountID = nil
+		}
+	}
+	if p.GroupID != nil {
+		if *p.GroupID > 0 {
+			id := *p.GroupID
+			existing.GroupID = &id
+			existing.AccountID = nil
+		} else {
+			existing.GroupID = nil
+		}
+	}
+	if p.Endpoint != nil {
+		// quota 模式允许清空 endpoint（校验由 validateMonitorModeFields 兜底）。
+		if strings.TrimSpace(*p.Endpoint) != "" {
+			if err := validateEndpoint(*p.Endpoint); err != nil {
+				return err
+			}
 		}
 		existing.Endpoint = normalizeEndpoint(*p.Endpoint)
 	}
+	// 模式与字段的组合校验（provider/check_mode/account_id/endpoint 全部应用后）。
+	if err := validateMonitorModeFields(existing); err != nil {
+		return err
+	}
 	if p.PrimaryModel != nil {
-		primaryModel := normalizeMonitorPrimaryModel(existing.Provider, *p.PrimaryModel)
+		primaryModel := normalizeMonitorPrimaryModel(existing.Provider, defaultCheckMode(existing.CheckMode), *p.PrimaryModel)
 		if primaryModel == "" {
 			return ErrChannelMonitorMissingPrimaryModel
 		}

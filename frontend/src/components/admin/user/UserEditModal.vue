@@ -31,7 +31,11 @@
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.form.roleLabel') }}</label>
-        <Select v-model="form.role" :options="roleOptions" />
+        <Select
+          v-model="form.role"
+          :options="roleOptions"
+          :searchable="false"
+        />
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.notes') }}</label>
@@ -39,7 +43,16 @@
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.columns.concurrency') }}</label>
-        <input v-model.number="form.concurrency" type="number" class="input" />
+        <input
+          v-model.number="form.concurrency"
+          type="number"
+          min="0"
+          step="1"
+          class="input"
+          :placeholder="t('admin.users.form.concurrencyPlaceholder')"
+          data-test="concurrency-input"
+        />
+        <p class="input-hint">{{ t('admin.users.form.concurrencyHint') }}</p>
       </div>
       <div>
         <label class="input-label">{{ t('admin.users.form.rpmLimit') }}</label>
@@ -70,7 +83,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, computed } from 'vue'
+import { computed, ref, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useClipboard } from '@/composables/useClipboard'
@@ -88,7 +101,16 @@ const emit = defineEmits(['close', 'success'])
 const { t } = useI18n(); const appStore = useAppStore(); const { copyToClipboard } = useClipboard()
 
 const submitting = ref(false); const passwordCopied = ref(false)
-const form = reactive({ email: '', password: '', username: '', notes: '', role: 'user', concurrency: 1, rpm_limit: 0, customAttributes: {} as UserAttributeValuesMap })
+const form = reactive({
+  email: '',
+  password: '',
+  username: '',
+  notes: '',
+  role: 'user' as AdminUser['role'],
+  concurrency: 1,
+  rpm_limit: 0,
+  customAttributes: {} as UserAttributeValuesMap
+})
 
 const roleOptions = computed<SelectOption[]>(() => [
   { value: 'user', label: t('admin.users.roles.user') },
@@ -120,8 +142,9 @@ const handleUpdateUser = async () => {
     appStore.showError(t('admin.users.emailRequired'))
     return
   }
-  if (form.concurrency < 1) {
-    appStore.showError(t('admin.users.concurrencyMin'))
+  // 0 = 不限制，与网关 (AcquireUserSlot: maxConcurrency <= 0) 和批量改限额一致
+  if (!Number.isInteger(form.concurrency) || form.concurrency < 0) {
+    appStore.showError(t('admin.users.concurrencyNonNegative'))
     return
   }
   const userId = props.user.id

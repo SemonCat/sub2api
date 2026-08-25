@@ -20,6 +20,7 @@ type AdminHandlers struct {
 	AntigravityOAuth       *admin.AntigravityOAuthHandler
 	KiroOAuth              *admin.KiroOAuthHandler
 	GrokOAuth              *admin.GrokOAuthHandler
+	CNProvider             *admin.CNProviderHandler
 	Proxy                  *admin.ProxyHandler
 	Redeem                 *admin.RedeemHandler
 	Promo                  *admin.PromoHandler
@@ -32,6 +33,7 @@ type AdminHandlers struct {
 	ErrorPassthrough       *admin.ErrorPassthroughHandler
 	PromptRule             *admin.PromptRuleHandler
 	TLSFingerprintProfile  *admin.TLSFingerprintProfileHandler
+	Plugin                 *admin.PluginHandler
 	APIKey                 *admin.AdminAPIKeyHandler
 	ScheduledTest          *admin.ScheduledTestHandler
 	Channel                *admin.ChannelHandler

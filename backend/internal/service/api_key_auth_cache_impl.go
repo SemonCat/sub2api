@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 22 // v22: Kiro cache fields + group profit control + search/audio/video_model_prices billing fields
+const apiKeyAuthSnapshotVersion = 22 // v22: Kiro cache fields + group profit control + search/audio/video_model_prices billing fields + long-context + model pricing + CN providers
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -412,6 +412,8 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			AudioRealtimePricePerMin:        groupForSnapshot.AudioRealtimePricePerMin,
 			AudioTTSPricePerMillionChars:    groupForSnapshot.AudioTTSPricePerMillionChars,
 			AudioSTTPricePerHour:            groupForSnapshot.AudioSTTPricePerHour,
+			LongContextPricingEnabled:       groupForSnapshot.LongContextPricingEnabled,
+			ModelPricing:                    groupForSnapshot.ModelPricing,
 			ClaudeCodeOnly:                  groupForSnapshot.ClaudeCodeOnly,
 			FallbackGroupID:                 groupForSnapshot.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: groupForSnapshot.FallbackGroupIDOnInvalidRequest,
@@ -515,6 +517,8 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			AudioRealtimePricePerMin:        snapshot.Group.AudioRealtimePricePerMin,
 			AudioTTSPricePerMillionChars:    snapshot.Group.AudioTTSPricePerMillionChars,
 			AudioSTTPricePerHour:            snapshot.Group.AudioSTTPricePerHour,
+			LongContextPricingEnabled:       snapshot.Group.LongContextPricingEnabled,
+			ModelPricing:                    snapshot.Group.ModelPricing,
 			ClaudeCodeOnly:                  snapshot.Group.ClaudeCodeOnly,
 			FallbackGroupID:                 snapshot.Group.FallbackGroupID,
 			FallbackGroupIDOnInvalidRequest: snapshot.Group.FallbackGroupIDOnInvalidRequest,

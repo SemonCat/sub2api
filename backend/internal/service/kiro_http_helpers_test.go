@@ -464,3 +464,97 @@ func TestNormalizeKiroEndpointFieldsAuto(t *testing.T) {
 	normalizeKiroEndpointFields(g2)
 	require.Equal(t, "", g2.KiroEndpointMode)
 }
+
+// TestKiroAccountLacksEnterpriseProfile 验证 BuilderId/Social 被判定为无企业 profile（跳过
+// ListAvailableProfiles），而 Enterprise/ExternalIdp 及未知 provider 一律照旧查询。
+func TestKiroAccountLacksEnterpriseProfile(t *testing.T) {
+	cases := []struct {
+		name        string
+		credentials map[string]any
+		want        bool
+	}{
+		{
+			name:        "provider BuilderId 跳过",
+			credentials: map[string]any{"auth_method": "idc", "provider": "BuilderId"},
+			want:        true,
+		},
+		{
+			name:        "provider 大小写不敏感",
+			credentials: map[string]any{"auth_method": "idc", "provider": "builderid"},
+			want:        true,
+		},
+		{
+			name:        "social 登录跳过",
+			credentials: map[string]any{"auth_method": "social", "provider": "Github"},
+			want:        true,
+		},
+		{
+			name:        "builder id start_url 跳过",
+			credentials: map[string]any{"auth_method": "idc", "start_url": kiropkg.BuilderIDStartURL},
+			want:        true,
+		},
+		{
+			name:        "builder id start_url 末尾斜杠跳过",
+			credentials: map[string]any{"auth_method": "idc", "start_url": kiropkg.BuilderIDStartURL + "/"},
+			want:        true,
+		},
+		{
+			name:        "provider 与 start_url 均缺失视为 BuilderId",
+			credentials: map[string]any{"api_region": "us-west-2"},
+			want:        true,
+		},
+		{
+			name:        "provider Enterprise 照旧查询",
+			credentials: map[string]any{"auth_method": "idc", "provider": "Enterprise"},
+			want:        false,
+		},
+		{
+			name:        "provider Enterprise 大小写不敏感",
+			credentials: map[string]any{"auth_method": "idc", "provider": "enterprise"},
+			want:        false,
+		},
+		{
+			name:        "遗留 provider AWS + 企业 start_url 照旧查询",
+			credentials: map[string]any{"auth_method": "idc", "provider": "AWS", "start_url": "https://d-example.awsapps.com/start"},
+			want:        false,
+		},
+		{
+			name:        "遗留 provider AWS 无 start_url 跳过",
+			credentials: map[string]any{"auth_method": "idc", "provider": "AWS"},
+			want:        true,
+		},
+		{
+			name:        "遗留 provider AWS + builder id start_url 跳过",
+			credentials: map[string]any{"auth_method": "idc", "provider": "AWS", "start_url": kiropkg.BuilderIDStartURL},
+			want:        true,
+		},
+		{
+			name:        "企业 start_url 无 provider 照旧查询",
+			credentials: map[string]any{"auth_method": "idc", "start_url": "https://d-example.awsapps.com/start"},
+			want:        false,
+		},
+		{
+			name:        "external_idp 照旧查询",
+			credentials: map[string]any{"auth_method": "external_idp", "provider": "ExternalIdp"},
+			want:        false,
+		},
+		{
+			name:        "auth_method external_idp 无 provider 照旧查询",
+			credentials: map[string]any{"auth_method": "external_idp"},
+			want:        false,
+		},
+		{
+			name:        "provider BuilderId 优先于企业 start_url 跳过",
+			credentials: map[string]any{"auth_method": "idc", "provider": "BuilderId", "start_url": "https://d-example.awsapps.com/start"},
+			want:        true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			account := &Account{Platform: PlatformKiro, Type: AccountTypeOAuth, Credentials: tc.credentials}
+			require.Equal(t, tc.want, kiroAccountLacksEnterpriseProfile(account))
+		})
+	}
+
+	require.False(t, kiroAccountLacksEnterpriseProfile(nil))
+}

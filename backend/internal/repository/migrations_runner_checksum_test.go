@@ -1,9 +1,14 @@
 package repository
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/Wei-Shaw/sub2api/migrations"
 )
 
 func TestIsMigrationChecksumCompatible(t *testing.T) {
@@ -161,4 +166,72 @@ func TestIsMigrationChecksumCompatible(t *testing.T) {
 		)
 		require.False(t, ok)
 	})
+
+	// 224 曾被就地补 'kiro' 并在部分环境应用，随后回滚为已发布版本，
+	// 于是同一迁移在不同环境出现两个方向的 checksum 冲突，两向都需放行。
+	t.Run("224补kiro版与已发布版双向兼容", func(t *testing.T) {
+		const (
+			released = "5227db3c1a6a1e2e422a9f9ba9d1f490c708b6c6dd91ce89f3c48115421a3e55"
+			edited   = "4de3bf301cd838bbaf85613ce37dd47643165c0e3f36a1075341ff71aa37fae1"
+			name     = "224_user_platform_quotas_add_cn_providers.sql"
+		)
+		// db=补kiro版 / file=已发布版（回滚后的环境，例如已应用改动版的 VPS）
+		require.True(t, isMigrationChecksumCompatible(name, edited, released))
+		// db=已发布版 / file=补kiro版（尚未回滚文件的环境）
+		require.True(t, isMigrationChecksumCompatible(name, released, edited))
+	})
+
+	t.Run("224未知checksum不兼容", func(t *testing.T) {
+		const name = "224_user_platform_quotas_add_cn_providers.sql"
+		unknown := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+		require.False(t, isMigrationChecksumCompatible(name,
+			"4de3bf301cd838bbaf85613ce37dd47643165c0e3f36a1075341ff71aa37fae1", unknown))
+		require.False(t, isMigrationChecksumCompatible(name, unknown,
+			"5227db3c1a6a1e2e422a9f9ba9d1f490c708b6c6dd91ce89f3c48115421a3e55"))
+	})
+}
+
+// knownStaleCompatibilityRules 是已知的「死规则」：其迁移文件在规则写下之后又被改动，
+// 但规则的 fileChecksum 未同步更新，导致 isMigrationChecksumCompatible 永不命中
+// （该函数要求 db 与 file 两侧都落在接受集内）。这些环境升级时仍会撞 checksum mismatch。
+//
+// 逐条修复需要审阅各自 diff 判断新旧版语义是否互认，不在单次改动的范围内，先登记冻结。
+// 修好一条就从此表移除 —— 下面的用例会强制这一点，避免白名单腐化。
+var knownStaleCompatibilityRules = map[string]struct{}{
+	"109_auth_identity_compat_backfill.sql":                   {},
+	"110_pending_auth_and_provider_default_grants.sql":        {},
+	"112_add_payment_order_provider_key_snapshot.sql":         {},
+	"118_wechat_dual_mode_and_auth_source_defaults.sql":       {},
+	"123_fix_legacy_auth_source_grant_on_signup_defaults.sql": {},
+	"195_channel_monitor_mode.sql":                            {},
+	"218_group_audio_voice_pricing.sql":                       {},
+	"219_group_search_price_per_1k.sql":                       {},
+	"220_clear_non_grok_video_generation_config.sql":          {},
+}
+
+// TestMigrationChecksumCompatibilityRules_NotStale 防漂移：兼容规则里的 checksum 是
+// 硬编码值，若对应迁移文件之后又被改动，规则会静默失效（启动报 checksum mismatch，
+// 且错误信息不会提示"规则已过期"，极难定位）。此用例按 ApplyMigrations 的算法
+// （TrimSpace 后 SHA256）重算嵌入内容，确保每条规则对当前文件仍然可命中。
+func TestMigrationChecksumCompatibilityRules_NotStale(t *testing.T) {
+	for name, rule := range migrationChecksumCompatibilityRules {
+		content, err := migrations.FS.ReadFile(name)
+		if err != nil {
+			continue // 规则对应的文件可能已删除/改名，不在本用例职责内
+		}
+		sum := sha256.Sum256([]byte(strings.TrimSpace(string(content))))
+		current := hex.EncodeToString(sum[:])
+		_, live := rule.acceptedChecksums[current]
+
+		if _, known := knownStaleCompatibilityRules[name]; known {
+			require.Falsef(t, live,
+				"%s 的兼容规则已修好（接受集已含当前 checksum %s），"+
+					"请从 knownStaleCompatibilityRules 移除该条目", name, current)
+			continue
+		}
+		require.Truef(t, live,
+			"%s 的兼容规则未包含当前嵌入文件的 checksum(%s) → 规则永不命中（死规则）；"+
+				"改动迁移文件时必须同步更新规则，命中它的升级路径否则会在启动时报 checksum mismatch",
+			name, current)
+	}
 }

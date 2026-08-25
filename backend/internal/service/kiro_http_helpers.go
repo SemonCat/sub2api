@@ -41,6 +41,51 @@ func kiroDefaultProfileARN(account *Account) string {
 	return kiroBuilderIDProfileARN
 }
 
+// kiroAccountLacksEnterpriseProfile 判断账号是否不存在企业 profile。
+//
+// BuilderId（个人 Builder ID）与 Enterprise（企业自建 IAM Identity Center）的 auth_method
+// 都是 "idc"，无法据此区分，只能按 provider 判断。provider 取值受白名单约束
+// （Google/Github/BuilderId/Enterprise/ExternalIdp，见 kiropkg.IsValidKiroProvider），
+// 企业账号必为 kiropkg.ProviderEnterprise。
+//
+// 无企业 profile 的账号调用 ListAvailableProfiles 必然返回
+// 403 AccessDeniedException: "AWS Builder ID is not supported for this operation."，
+// 直接回填默认 ARN 即可，无需发起注定失败的请求。
+//
+// 判定为 allow-list：仅当存在企业身份证据（provider 为 Enterprise/ExternalIdp，
+// 或 start_url 指向自建 IAM Identity Center）时才返回 false 去查询；
+// 其余（BuilderId、Social、以及早期兜底写入 "AWS" 这类非白名单遗留值）一律返回 true 跳过。
+func kiroAccountLacksEnterpriseProfile(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	// ExternalIdp（企业外部 IdP）可能持有真实 profile，需要查询。
+	provider := strings.TrimSpace(account.GetCredential("provider"))
+	authMethod := strings.TrimSpace(account.GetCredential("auth_method"))
+	if strings.EqualFold(provider, kiropkg.ProviderExternalIdp) || strings.EqualFold(authMethod, "external_idp") {
+		return false
+	}
+	// Enterprise：企业自建 IAM Identity Center，需要查询真实 profile ARN。
+	if strings.EqualFold(provider, kiropkg.ProviderEnterprise) {
+		return false
+	}
+	// 白名单内的 BuilderId/Google/Github 明确无企业 profile。provider 经白名单校验，
+	// 权威性高于 start_url，即便 start_url 看似自建也直接跳过。
+	if strings.EqualFold(provider, kiropkg.ProviderBuilderId) ||
+		strings.EqualFold(provider, kiropkg.ProviderGoogle) ||
+		strings.EqualFold(provider, kiropkg.ProviderGithub) ||
+		kiroIsSocialLogin(account) {
+		return true
+	}
+	// provider 为遗留非白名单值（早期兜底的 "AWS" 等）时，自建 start_url 仍是企业身份的有效证据。
+	// 容忍末尾斜杠差异，语义对齐 kiropkg.resolveIDCProvider。
+	startURL := strings.TrimRight(strings.TrimSpace(account.GetCredential("start_url")), "/")
+	if startURL != "" && !strings.EqualFold(startURL, strings.TrimRight(kiropkg.BuilderIDStartURL, "/")) {
+		return false
+	}
+	return true
+}
+
 func buildKiroAccountKey(account *Account) string {
 	if account == nil {
 		return ""

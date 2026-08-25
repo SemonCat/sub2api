@@ -3,6 +3,7 @@ package handler
 import (
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -39,6 +40,16 @@ func (h *ChannelMonitorUserHandler) featureEnabled(c *gin.Context) bool {
 	return runtime.Enabled && runtime.Mode == service.ChannelMonitorModeV1
 }
 
+// quotaVisible 返回用户端是否展示完整配额/余额快照（channel_monitor_show_quota，
+// fail-closed：未配置/非 "true" 一律视为关闭）。关闭时仍会下发组级账号计数。
+// settingService 为 nil 时 fail-closed。
+func (h *ChannelMonitorUserHandler) quotaVisible(c *gin.Context) bool {
+	if h.settingService == nil {
+		return false
+	}
+	return h.settingService.GetChannelMonitorRuntime(c.Request.Context()).ShowQuota
+}
+
 // --- Response ---
 
 type channelMonitorUserListItem struct {
@@ -51,8 +62,13 @@ type channelMonitorUserListItem struct {
 	PrimaryLatencyMs     *int                                 `json:"primary_latency_ms"`
 	PrimaryPingLatencyMs *int                                 `json:"primary_ping_latency_ms"`
 	Availability7d       float64                              `json:"availability_7d"`
+	CheckMode            string                               `json:"check_mode"`
 	ExtraModels          []dto.ChannelMonitorExtraModelStatus `json:"extra_models"`
 	Timeline             []channelMonitorUserTimelinePoint    `json:"timeline"`
+	// LatestQuota 主模型最近配额快照。
+	// channel_monitor_show_quota=true 时原样下发；关闭时单账号快照剥离，
+	// 组级快照只留账号计数（见 redactUserQuotaSnapshot）。
+	LatestQuota *domain.MonitorQuotaSnapshot `json:"latest_quota,omitempty"`
 }
 
 // channelMonitorUserTimelinePoint 主模型最近一次检测的 timeline 点。
@@ -82,7 +98,7 @@ type channelMonitorUserModelStat struct {
 	AvgLatency7dMs  *int    `json:"avg_latency_7d_ms"`
 }
 
-func userMonitorViewToItem(v *service.UserMonitorView) channelMonitorUserListItem {
+func userMonitorViewToItem(v *service.UserMonitorView, includeQuota bool) channelMonitorUserListItem {
 	extras := make([]dto.ChannelMonitorExtraModelStatus, 0, len(v.ExtraModels))
 	for _, e := range v.ExtraModels {
 		extras = append(extras, dto.ChannelMonitorExtraModelStatus{
@@ -100,7 +116,7 @@ func userMonitorViewToItem(v *service.UserMonitorView) channelMonitorUserListIte
 			CheckedAt:     p.CheckedAt.UTC().Format(time.RFC3339),
 		})
 	}
-	return channelMonitorUserListItem{
+	item := channelMonitorUserListItem{
 		ID:                   v.ID,
 		Name:                 v.Name,
 		Provider:             v.Provider,
@@ -110,8 +126,36 @@ func userMonitorViewToItem(v *service.UserMonitorView) channelMonitorUserListIte
 		PrimaryLatencyMs:     v.PrimaryLatencyMs,
 		PrimaryPingLatencyMs: v.PrimaryPingLatencyMs,
 		Availability7d:       v.Availability7d,
+		CheckMode:            v.CheckMode,
 		ExtraModels:          extras,
 		Timeline:             timeline,
+		LatestQuota:          redactUserQuotaSnapshot(v.LatestQuota, includeQuota),
+	}
+	return item
+}
+
+// redactUserQuotaSnapshot 控制用户端能看到哪些配额字段。
+//
+// 全量开：原样下发。
+// 全量关：单账号快照剥离（accounts_total==0）；组级快照只留账号计数，
+// 不含 tier / 余额 / 套餐 / 错误细节。这样用户页能看到「还有几个号有额度」，
+// 不必把 channel_monitor_show_quota 默认打开。
+func redactUserQuotaSnapshot(snapshot *domain.MonitorQuotaSnapshot, includeFull bool) *domain.MonitorQuotaSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	if includeFull {
+		return snapshot
+	}
+	if snapshot.AccountsTotal <= 0 {
+		return nil
+	}
+	return &domain.MonitorQuotaSnapshot{
+		Success:           snapshot.Success,
+		FetchedAt:         snapshot.FetchedAt,
+		AccountsTotal:     snapshot.AccountsTotal,
+		AccountsHealthy:   snapshot.AccountsHealthy,
+		AccountsExhausted: snapshot.AccountsExhausted,
 	}
 }
 
@@ -150,9 +194,10 @@ func (h *ChannelMonitorUserHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	includeQuota := h.quotaVisible(c)
 	items := make([]channelMonitorUserListItem, 0, len(views))
 	for _, v := range views {
-		items = append(items, userMonitorViewToItem(v))
+		items = append(items, userMonitorViewToItem(v, includeQuota))
 	}
 	response.Success(c, gin.H{"items": items})
 }

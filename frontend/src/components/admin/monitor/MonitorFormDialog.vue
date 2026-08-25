@@ -11,6 +11,27 @@
         <input v-model="form.name" type="text" required class="input" :placeholder="t('admin.channelMonitor.form.namePlaceholder')" />
       </div>
 
+      <!-- 检测模式：probe（探活）/ quota（仅配额）/ quota_probe（探活+配额） -->
+      <div>
+        <label class="input-label">{{ t('admin.channelMonitor.form.checkMode') }}</label>
+        <div class="grid gap-3 sm:grid-cols-3" data-testid="monitor-check-mode">
+          <button
+            v-for="opt in checkModeOptions"
+            :key="opt.value"
+            type="button"
+            :data-testid="`monitor-check-mode-${opt.value}`"
+            :aria-pressed="form.check_mode === opt.value"
+            :disabled="opt.disabled"
+            class="rounded-lg border-2 px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            :class="checkModeButtonClass(opt.value)"
+            @click="selectCheckMode(opt.value)"
+          >
+            <span class="block text-sm font-semibold">{{ opt.label }}</span>
+            <span class="mt-0.5 block text-xs opacity-80">{{ opt.hint }}</span>
+          </button>
+        </div>
+      </div>
+
       <div>
         <label class="input-label">{{ t('admin.channelMonitor.form.provider') }} <span class="text-red-500">*</span></label>
         <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -30,7 +51,72 @@
         </div>
       </div>
 
-      <div v-if="form.provider === PROVIDER_OPENAI" class="rounded-lg border border-blue-100 bg-blue-50/50 p-3 dark:border-blue-500/20 dark:bg-blue-500/10">
+      <!-- 配额模式数据源：单账号 or 分组聚合（复用账号侧用量/余额服务） -->
+      <div v-if="usesQuotaMode">
+        <label class="input-label">
+          {{ t('admin.channelMonitor.form.quotaSource') }} <span class="text-red-500">*</span>
+        </label>
+        <div class="mb-2 grid gap-3 sm:grid-cols-2" data-testid="monitor-quota-source">
+          <button
+            v-for="opt in quotaSourceOptions"
+            :key="opt.value"
+            type="button"
+            :data-testid="`monitor-quota-source-${opt.value}`"
+            :aria-pressed="quotaSource === opt.value"
+            class="rounded-lg border-2 px-3 py-2 text-sm font-medium transition-colors"
+            :class="quotaSourceButtonClass(opt.value)"
+            @click="selectQuotaSource(opt.value)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+
+        <template v-if="usesGroupSource">
+          <div data-testid="monitor-linked-group">
+            <Select
+              v-model="groupSelectValue"
+              :options="groupOptions"
+              :placeholder="t('admin.channelMonitor.form.linkedGroupPlaceholder')"
+              remote
+              :loading="groupsLoading"
+              @search="onGroupSearch"
+            />
+          </div>
+          <p class="mt-1 text-xs text-gray-400">{{ t('admin.channelMonitor.form.linkedGroupHint') }}</p>
+          <p v-if="groupHydrationFailed" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            {{ t('admin.channelMonitor.form.linkedGroupMissing') }}
+          </p>
+          <p v-if="groupOptions.length === 0 && !groupsLoading && !groupSearchQuery" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            {{ t('admin.channelMonitor.form.linkedGroupEmpty') }}
+          </p>
+        </template>
+
+        <template v-else>
+          <div data-testid="monitor-linked-account">
+            <Select
+              v-model="accountSelectValue"
+              :options="accountOptions"
+              :placeholder="t('admin.channelMonitor.form.linkedAccountPlaceholder')"
+              remote
+              :loading="accountsLoading"
+              @search="onAccountSearch"
+            />
+          </div>
+          <p class="mt-1 text-xs text-gray-400">{{ t('admin.channelMonitor.form.linkedAccountHint') }}</p>
+          <p v-if="accountHydrationFailed" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            {{ t('admin.channelMonitor.form.linkedAccountMissing') }}
+          </p>
+          <p v-if="accountOptions.length === 0 && !accountsLoading && !accountSearchQuery" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            {{ t('admin.channelMonitor.form.linkedAccountEmpty') }}
+          </p>
+        </template>
+
+        <p v-if="form.provider === PROVIDER_OPENAI" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+          {{ t('admin.channelMonitor.form.openAIQuotaProbeHint') }}
+        </p>
+      </div>
+
+      <div v-if="form.provider === PROVIDER_OPENAI && usesProbePart" class="rounded-lg border border-blue-100 bg-blue-50/50 p-3 dark:border-blue-500/20 dark:bg-blue-500/10">
         <label class="input-label">{{ t('admin.channelMonitor.form.apiMode') }}</label>
         <div class="grid gap-3 sm:grid-cols-2">
           <button
@@ -48,7 +134,7 @@
         </div>
       </div>
 
-      <div>
+      <div v-if="usesProbePart">
         <label class="input-label">{{ t('admin.channelMonitor.form.endpoint') }} <span class="text-red-500">*</span></label>
         <div class="flex gap-2">
           <input v-model="form.endpoint" data-testid="monitor-endpoint" type="text" required class="input flex-1" :placeholder="t('admin.channelMonitor.form.endpointPlaceholder')" />
@@ -58,7 +144,7 @@
         </div>
       </div>
 
-      <div>
+      <div v-if="usesProbePart">
         <label class="input-label">
           {{ t('admin.channelMonitor.form.apiKey') }}<span v-if="!editing" class="text-red-500"> *</span>
         </label>
@@ -77,7 +163,7 @@
         <p v-if="editing && editing.api_key_masked" class="mt-1 text-xs text-gray-400">{{ editing.api_key_masked }}</p>
       </div>
 
-      <div>
+      <div v-if="usesProbePart">
         <label class="input-label">{{ t('admin.channelMonitor.form.primaryModel') }} <span class="text-red-500">*</span></label>
         <input
           v-model="form.primary_model"
@@ -90,7 +176,7 @@
         />
       </div>
 
-      <div>
+      <div v-if="usesProbePart">
         <label class="input-label">{{ t('admin.channelMonitor.form.extraModels') }}</label>
         <ModelTagInput
           :models="form.extra_models"
@@ -122,8 +208,8 @@
         <Toggle v-model="form.enabled" />
       </div>
 
-      <!-- 高级设置区：请求模板 + 自定义 headers/body -->
-      <details class="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-dark-700 dark:bg-dark-900/30">
+      <!-- 高级设置区：请求模板 + 自定义 headers/body（仅探活模式有意义） -->
+      <details v-if="usesProbePart" class="rounded-lg border border-gray-200 bg-gray-50/50 p-3 dark:border-dark-700 dark:bg-dark-900/30">
         <summary class="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.channelMonitor.advanced.section') }}
         </summary>
@@ -197,6 +283,7 @@ import type {
   ChannelMonitor,
   CreateParams,
   APIMode,
+  CheckMode,
   Provider,
   UpdateParams,
 } from '@/api/admin/channelMonitor'
@@ -216,10 +303,22 @@ import {
   PROVIDER_ANTHROPIC,
   PROVIDER_GEMINI,
   PROVIDER_GROK,
+  PROVIDER_ANTIGRAVITY,
+  PROVIDER_KIRO,
+  PROVIDER_KIMI,
+  PROVIDER_ZHIPU,
+  PROVIDER_DEEPSEEK,
+  QUOTA_ONLY_PROVIDERS,
   API_MODE_CHAT_COMPLETIONS,
   API_MODE_RESPONSES,
+  CHECK_MODE_PROBE,
+  CHECK_MODE_QUOTA,
+  CHECK_MODE_QUOTA_PROBE,
   DEFAULT_GROK_ENDPOINT,
   DEFAULT_GROK_MODEL,
+  DEFAULT_KIMI_ENDPOINT,
+  DEFAULT_ZHIPU_ENDPOINT,
+  DEFAULT_DEEPSEEK_ENDPOINT,
   DEFAULT_INTERVAL_SECONDS,
 } from '@/constants/channelMonitor'
 
@@ -259,6 +358,9 @@ interface MonitorForm {
   name: string
   provider: Provider
   api_mode: APIMode
+  check_mode: CheckMode
+  account_id: number | null
+  group_id: number | null
   endpoint: string
   api_key: string
   primary_model: string
@@ -278,6 +380,9 @@ const form = reactive<MonitorForm>({
   name: '',
   provider: PROVIDER_ANTHROPIC,
   api_mode: API_MODE_CHAT_COMPLETIONS,
+  check_mode: CHECK_MODE_PROBE,
+  account_id: null,
+  group_id: null,
   endpoint: '',
   api_key: '',
   primary_model: '',
@@ -291,6 +396,41 @@ const form = reactive<MonitorForm>({
   body_override_mode: 'off',
   body_override: null,
 })
+
+// quota / quota_probe 需要关联数据源；probe / quota_probe 需要探活字段。
+const usesQuotaMode = computed(() => form.check_mode !== CHECK_MODE_PROBE)
+const usesProbePart = computed(() => form.check_mode !== CHECK_MODE_QUOTA)
+
+// 配额数据源二选一：单账号看一个号的余量，分组聚合组内全部 active 账号
+// （一个号耗尽不代表渠道不可用，账号多的分组需要聚合口径）。后端 account_id
+// 与 group_id 互斥，这里用一个显式开关避免用户同时选中两个。
+type QuotaSource = 'account' | 'group'
+const quotaSource = ref<QuotaSource>('account')
+const usesGroupSource = computed(() => usesQuotaMode.value && quotaSource.value === 'group')
+
+const quotaSourceOptions = computed(() => [
+  { value: 'account' as QuotaSource, label: t('admin.channelMonitor.form.quotaSourceAccount') },
+  { value: 'group' as QuotaSource, label: t('admin.channelMonitor.form.quotaSourceGroup') },
+])
+
+function selectQuotaSource(source: QuotaSource) {
+  if (quotaSource.value === source) return
+  quotaSource.value = source
+  // 切换数据源即清掉另一侧的绑定，保证提交时只有一个非空。
+  form.account_id = null
+  form.group_id = null
+  pinnedAccount.value = null
+  pinnedGroup.value = null
+  accountHydrationFailed.value = false
+  groupHydrationFailed.value = false
+}
+
+function quotaSourceButtonClass(source: QuotaSource): string {
+  if (quotaSource.value === source) {
+    return 'border-primary-500 bg-white text-primary-700 shadow-sm dark:border-primary-400 dark:bg-primary-500/15 dark:text-primary-300'
+  }
+  return 'border-blue-100 bg-white/70 text-gray-600 hover:border-primary-300 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400'
+}
 
 // jitter 上限与后端校验一致：interval - jitter 不得低于最小检测间隔 15 秒。
 const maxJitterSeconds = computed<number>(() => Math.max(0, (form.interval_seconds || 0) - 15))
@@ -402,7 +542,325 @@ const providerOptions = computed<ProviderOption[]>(() => [
   { value: PROVIDER_OPENAI, label: t('monitorCommon.providers.openai') },
   { value: PROVIDER_GEMINI, label: t('monitorCommon.providers.gemini') },
   { value: PROVIDER_GROK, label: t('monitorCommon.providers.grok') },
+  { value: PROVIDER_ANTIGRAVITY, label: t('monitorCommon.providers.antigravity') },
+  { value: PROVIDER_KIRO, label: t('monitorCommon.providers.kiro') },
+  { value: PROVIDER_KIMI, label: t('monitorCommon.providers.kimi') },
+  { value: PROVIDER_ZHIPU, label: t('monitorCommon.providers.zhipu') },
+  { value: PROVIDER_DEEPSEEK, label: t('monitorCommon.providers.deepseek') },
 ])
+
+// 国产 provider 预填的官方 endpoint（仅探活侧；配额模式 endpoint 可留空）。
+const PROVIDER_DEFAULT_ENDPOINTS: Partial<Record<Provider, string>> = {
+  [PROVIDER_KIMI]: DEFAULT_KIMI_ENDPOINT,
+  [PROVIDER_ZHIPU]: DEFAULT_ZHIPU_ENDPOINT,
+  [PROVIDER_DEEPSEEK]: DEFAULT_DEEPSEEK_ENDPOINT,
+}
+
+interface CheckModeOption {
+  value: CheckMode
+  label: string
+  hint: string
+  disabled: boolean
+}
+
+// antigravity / kiro 无探活 adapter，只支持配额模式（后端 probeCapableProviders 的补集）。
+function isQuotaOnlyProvider(provider: Provider): boolean {
+  return QUOTA_ONLY_PROVIDERS.includes(provider)
+}
+
+const quotaOnlyProvider = computed(() => isQuotaOnlyProvider(form.provider))
+
+const checkModeOptions = computed<CheckModeOption[]>(() => [
+  {
+    value: CHECK_MODE_PROBE,
+    label: t('admin.channelMonitor.form.checkModeProbe'),
+    hint: t('admin.channelMonitor.form.checkModeProbeHint'),
+    disabled: quotaOnlyProvider.value,
+  },
+  {
+    value: CHECK_MODE_QUOTA,
+    label: t('admin.channelMonitor.form.checkModeQuota'),
+    hint: t('admin.channelMonitor.form.checkModeQuotaHint'),
+    disabled: false,
+  },
+  {
+    value: CHECK_MODE_QUOTA_PROBE,
+    label: t('admin.channelMonitor.form.checkModeQuotaProbe'),
+    hint: t('admin.channelMonitor.form.checkModeQuotaProbeHint'),
+    disabled: quotaOnlyProvider.value,
+  },
+])
+
+function checkModeButtonClass(mode: CheckMode): string {
+  const active = form.check_mode === mode
+  if (active) {
+    return 'border-primary-500 bg-white text-primary-700 shadow-sm dark:border-primary-400 dark:bg-primary-500/15 dark:text-primary-300'
+  }
+  return 'border-blue-100 bg-white/70 text-gray-600 hover:border-primary-300 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400'
+}
+
+function selectCheckMode(mode: CheckMode) {
+  if (checkModeOptions.value.find((opt) => opt.value === mode)?.disabled) return
+  form.check_mode = mode
+  if (!usesQuotaMode.value) {
+    form.account_id = null
+    form.group_id = null
+  }
+}
+
+// --- 关联账号选择器 ---
+
+interface LinkedAccount {
+  id: number
+  name: string
+}
+
+const linkedAccounts = ref<LinkedAccount[]>([])
+const accountsLoading = ref(false)
+// 当前搜索词（用于空态文案区分「平台无账号」与「搜索无命中」）。
+const accountSearchQuery = ref('')
+// 已绑定账号回填失败（getById 失败或平台失配）时提示用户重新选择。
+const accountHydrationFailed = ref(false)
+// 固定选项：已绑定/已选中但不在当前结果页里的账号，保证搜索后 label 仍可见。
+const pinnedAccount = ref<LinkedAccount | null>(null)
+let accountSearchSeq = 0
+let accountSearchAbort: AbortController | null = null
+const hydrationAttempted = new Set<number>()
+
+const accountOptions = computed(() => {
+  const opts = linkedAccounts.value.map((a) => ({
+    value: String(a.id),
+    label: `${a.name} (#${a.id})`,
+  }))
+  const pinned = pinnedAccount.value
+  if (pinned && !linkedAccounts.value.some((a) => a.id === pinned.id)) {
+    opts.unshift({ value: String(pinned.id), label: `${pinned.name} (#${pinned.id})` })
+  }
+  return opts
+})
+
+// Select 组件绑定 string，与 number | null 互转。
+const accountSelectValue = computed<string>({
+  get: () => (form.account_id == null ? '' : String(form.account_id)),
+  set: (raw: string) => {
+    if (raw === '') {
+      form.account_id = null
+      pinnedAccount.value = null
+      accountHydrationFailed.value = false
+      return
+    }
+    const id = Number(raw)
+    if (Number.isFinite(id)) {
+      form.account_id = id
+      pinnedAccount.value = linkedAccounts.value.find((a) => a.id === id) ?? pinnedAccount.value
+    }
+  },
+})
+
+// 服务端搜索当前 provider 平台的账号（支持关键字，避免大分页截断取不齐）。
+// seq + abort 防止快速切换 provider / 连续输入时乱序响应覆盖新结果。
+// 失败不阻塞表单：下拉为空 + 空态提示。
+async function loadLinkedAccounts(search = '') {
+  if (!usesQuotaMode.value || !props.show) return
+  accountSearchQuery.value = search
+  const seq = ++accountSearchSeq
+  accountSearchAbort?.abort()
+  const controller = new AbortController()
+  accountSearchAbort = controller
+  accountsLoading.value = true
+  try {
+    const res = await adminAPI.accounts.list(
+      1,
+      50,
+      { platform: form.provider, ...(search ? { search } : {}) },
+      { signal: controller.signal },
+    )
+    if (seq !== accountSearchSeq) return
+    linkedAccounts.value = (res.items || []).map((a) => ({ id: a.id, name: a.name }))
+    await ensureSelectedAccountHydrated()
+  } catch (err: unknown) {
+    if (controller.signal.aborted) return
+    console.warn('load linked accounts failed', err)
+    if (!search) linkedAccounts.value = []
+  } finally {
+    if (seq === accountSearchSeq) accountsLoading.value = false
+  }
+}
+
+// 编辑已有 quota 监控时，已绑定账号可能不在搜索结果第一页：用 getById
+// 回填为固定选项，绑定不因分页截断而丢失。仅当账号确实无法加载或平台
+// 失配时才清空绑定（带可见提示），否则绑定只在用户显式切换 provider 时清空。
+async function ensureSelectedAccountHydrated() {
+  const id = form.account_id
+  if (id == null || !usesQuotaMode.value) return
+  if (linkedAccounts.value.some((a) => a.id === id) || pinnedAccount.value?.id === id) return
+  if (hydrationAttempted.has(id)) return
+  hydrationAttempted.add(id)
+  try {
+    const account = await adminAPI.accounts.getById(id)
+    if (form.account_id !== id) return
+    if (String(account.platform) !== form.provider) {
+      form.account_id = null
+      pinnedAccount.value = null
+      accountHydrationFailed.value = true
+      return
+    }
+    pinnedAccount.value = { id: account.id, name: account.name }
+  } catch {
+    if (form.account_id === id) {
+      form.account_id = null
+      pinnedAccount.value = null
+      accountHydrationFailed.value = true
+    }
+  }
+}
+
+function onAccountSearch(query: string) {
+  void loadLinkedAccounts(query)
+}
+
+// --- 关联分组选择器（组级聚合数据源） ---
+//
+// 与账号选择器同构：seq + abort 防乱序覆盖，pinned 保证已绑定项在搜索后仍可见，
+// getById 回填分页外的存量绑定。分组列表只取 active，停用分组不该充当数据源。
+
+interface LinkedGroup {
+  id: number
+  name: string
+}
+
+const linkedGroups = ref<LinkedGroup[]>([])
+const groupsLoading = ref(false)
+const groupSearchQuery = ref('')
+const groupHydrationFailed = ref(false)
+const pinnedGroup = ref<LinkedGroup | null>(null)
+let groupSearchSeq = 0
+let groupSearchAbort: AbortController | null = null
+const groupHydrationAttempted = new Set<number>()
+
+const groupOptions = computed(() => {
+  const opts = linkedGroups.value.map((g) => ({
+    value: String(g.id),
+    label: `${g.name} (#${g.id})`,
+  }))
+  const pinned = pinnedGroup.value
+  if (pinned && !linkedGroups.value.some((g) => g.id === pinned.id)) {
+    opts.unshift({ value: String(pinned.id), label: `${pinned.name} (#${pinned.id})` })
+  }
+  return opts
+})
+
+const groupSelectValue = computed<string>({
+  get: () => (form.group_id == null ? '' : String(form.group_id)),
+  set: (raw: string) => {
+    if (raw === '') {
+      form.group_id = null
+      pinnedGroup.value = null
+      groupHydrationFailed.value = false
+      return
+    }
+    const id = Number(raw)
+    if (Number.isFinite(id)) {
+      form.group_id = id
+      pinnedGroup.value = linkedGroups.value.find((g) => g.id === id) ?? pinnedGroup.value
+    }
+  },
+})
+
+async function loadLinkedGroups(search = '') {
+  if (!usesGroupSource.value || !props.show) return
+  groupSearchQuery.value = search
+  const seq = ++groupSearchSeq
+  groupSearchAbort?.abort()
+  const controller = new AbortController()
+  groupSearchAbort = controller
+  groupsLoading.value = true
+  try {
+    const res = await adminAPI.groups.list(
+      1,
+      50,
+      { platform: form.provider, status: 'active', ...(search ? { search } : {}) },
+      { signal: controller.signal },
+    )
+    if (seq !== groupSearchSeq) return
+    linkedGroups.value = (res.items || []).map((g) => ({ id: g.id, name: g.name }))
+    await ensureSelectedGroupHydrated()
+  } catch (err: unknown) {
+    if (controller.signal.aborted) return
+    console.warn('load linked groups failed', err)
+    if (!search) linkedGroups.value = []
+  } finally {
+    if (seq === groupSearchSeq) groupsLoading.value = false
+  }
+}
+
+async function ensureSelectedGroupHydrated() {
+  const id = form.group_id
+  if (id == null || !usesGroupSource.value) return
+  if (linkedGroups.value.some((g) => g.id === id) || pinnedGroup.value?.id === id) return
+  if (groupHydrationAttempted.has(id)) return
+  groupHydrationAttempted.add(id)
+  try {
+    const group = await adminAPI.groups.getById(id)
+    if (form.group_id !== id) return
+    if (String(group.platform) !== form.provider) {
+      form.group_id = null
+      pinnedGroup.value = null
+      groupHydrationFailed.value = true
+      return
+    }
+    pinnedGroup.value = { id: group.id, name: group.name }
+  } catch {
+    if (form.group_id === id) {
+      form.group_id = null
+      pinnedGroup.value = null
+      groupHydrationFailed.value = true
+    }
+  }
+}
+
+function onGroupSearch(query: string) {
+  void loadLinkedGroups(query)
+}
+
+watch(
+  () => [props.show, form.provider, form.check_mode] as const,
+  ([show, provider], prev) => {
+    const [prevShow, prevProvider] = prev ?? []
+    if (!show) {
+      accountSearchAbort?.abort()
+      return
+    }
+    // 弹窗重开 / provider 真正变化时重置回填状态（check_mode 变化不重置，
+    // 避免 probe↔quota 切换时无谓地重拉列表）。
+    if (show !== prevShow || provider !== prevProvider) {
+      hydrationAttempted.clear()
+      accountHydrationFailed.value = false
+      pinnedAccount.value = null
+    }
+    void loadLinkedAccounts()
+  },
+  { immediate: true },
+)
+
+// 分组列表：额外跟随 quotaSource，切到分组数据源时才首次拉取。
+watch(
+  () => [props.show, form.provider, form.check_mode, quotaSource.value] as const,
+  ([show, provider], prev) => {
+    const [prevShow, prevProvider] = prev ?? []
+    if (!show) {
+      groupSearchAbort?.abort()
+      return
+    }
+    if (show !== prevShow || provider !== prevProvider) {
+      groupHydrationAttempted.clear()
+      groupHydrationFailed.value = false
+      pinnedGroup.value = null
+    }
+    void loadLinkedGroups()
+  },
+  { immediate: true },
+)
 
 function selectProvider(provider: Provider) {
   if (form.provider === provider) return
@@ -411,14 +869,36 @@ function selectProvider(provider: Provider) {
     previousProvider === PROVIDER_GROK && form.endpoint === DEFAULT_GROK_ENDPOINT
   const clearGrokModel =
     previousProvider === PROVIDER_GROK && form.primary_model === DEFAULT_GROK_MODEL
+  const clearPrevDefaultEndpoint =
+    !!PROVIDER_DEFAULT_ENDPOINTS[previousProvider] && form.endpoint === PROVIDER_DEFAULT_ENDPOINTS[previousProvider]
   form.provider = provider
+  // 关联账号/分组都与平台绑定：切换 provider 时显式清空（这是唯一主动清空的入口）。
+  form.account_id = null
+  form.group_id = null
+  pinnedAccount.value = null
+  pinnedGroup.value = null
+  accountHydrationFailed.value = false
+  groupHydrationFailed.value = false
+  // 仅配额模式的 provider：切到它时强制 quota（checkModeOptions 同步禁用其余项）。
+  if (isQuotaOnlyProvider(provider)) {
+    form.check_mode = CHECK_MODE_QUOTA
+  } else if (isQuotaOnlyProvider(previousProvider) && form.check_mode === CHECK_MODE_QUOTA) {
+    // 对称还原：切走时撤掉强制 quota，否则编辑存量 antigravity/kiro
+    // 监控换平台后仍停留在 quota（目标平台未必支持），update 会携带残留配置。
+    // 同步清掉 quota 占位模型（loadFromMonitor 回填的 'quota'），否则切回
+    // probe 后拿 'quota' 当探活模型（与离开 grok 清 DEFAULT_GROK_MODEL 同理）。
+    form.check_mode = CHECK_MODE_PROBE
+    if (form.primary_model.trim() === 'quota') form.primary_model = ''
+  }
   if (provider === PROVIDER_GROK) {
     if (!form.endpoint.trim()) form.endpoint = DEFAULT_GROK_ENDPOINT
     if (!form.primary_model.trim()) form.primary_model = DEFAULT_GROK_MODEL
     return
   }
-  if (clearGrokEndpoint) form.endpoint = ''
+  if (clearGrokEndpoint || clearPrevDefaultEndpoint) form.endpoint = ''
   if (clearGrokModel) form.primary_model = ''
+  const defaultEndpoint = PROVIDER_DEFAULT_ENDPOINTS[provider]
+  if (defaultEndpoint && !form.endpoint.trim()) form.endpoint = defaultEndpoint
 }
 
 // Clear api_key whenever provider changes to avoid cross-provider key mismatch.
@@ -447,6 +927,14 @@ function resetForm() {
   form.name = ''
   form.provider = PROVIDER_ANTHROPIC
   form.api_mode = API_MODE_CHAT_COMPLETIONS
+  form.check_mode = CHECK_MODE_PROBE
+  form.account_id = null
+  form.group_id = null
+  quotaSource.value = 'account'
+  pinnedAccount.value = null
+  pinnedGroup.value = null
+  accountHydrationFailed.value = false
+  groupHydrationFailed.value = false
   form.endpoint = ''
   form.api_key = ''
   form.primary_model = ''
@@ -467,6 +955,11 @@ function loadFromMonitor(m: ChannelMonitor) {
   form.name = m.name
   form.provider = m.provider
   form.api_mode = normalizeAPIMode(m.api_mode)
+  form.check_mode = m.check_mode || CHECK_MODE_PROBE
+  form.account_id = m.account_id ?? null
+  form.group_id = m.group_id ?? null
+  // 数据源开关由存量绑定反推：只有 group_id 落库的监控才是组级聚合。
+  quotaSource.value = form.group_id != null ? 'group' : 'account'
   form.endpoint = m.endpoint
   form.api_key = ''
   form.primary_model = m.primary_model
@@ -533,15 +1026,20 @@ function buildPayload(): CreateParams {
     name: form.name.trim(),
     provider: form.provider,
     api_mode: form.provider === PROVIDER_OPENAI ? form.api_mode : API_MODE_CHAT_COMPLETIONS,
-    endpoint: form.endpoint.trim(),
-    api_key: form.api_key.trim(),
-    primary_model: form.primary_model.trim(),
-    extra_models: form.extra_models,
+    check_mode: form.check_mode,
+    // 数据源二选一：只发选中那一侧，另一侧留 null（update 的解绑由 handleSubmit
+    // 显式发 0，create 绝不发 0 以免落 &0 触发 FK 违约）。
+    account_id: usesQuotaMode.value && !usesGroupSource.value ? form.account_id : null,
+    group_id: usesGroupSource.value ? form.group_id : null,
+    endpoint: usesProbePart.value ? form.endpoint.trim() : '',
+    api_key: usesProbePart.value ? form.api_key.trim() : '',
+    primary_model: usesProbePart.value ? form.primary_model.trim() : 'quota',
+    extra_models: usesProbePart.value ? form.extra_models : [],
     group_name: form.group_name.trim(),
     enabled: form.enabled,
     interval_seconds: form.interval_seconds,
     jitter_seconds: form.jitter_seconds || 0,
-    template_id: form.template_id,
+    template_id: usesProbePart.value ? form.template_id : null,
     extra_headers: form.extra_headers,
     body_override_mode: form.body_override_mode,
     body_override: form.body_override,
@@ -554,7 +1052,15 @@ async function handleSubmit() {
     appStore.showError(t('admin.channelMonitor.nameRequired'))
     return
   }
-  if (!form.primary_model.trim()) {
+  if (usesQuotaMode.value && usesGroupSource.value && form.group_id == null) {
+    appStore.showError(t('admin.channelMonitor.linkedGroupRequired'))
+    return
+  }
+  if (usesQuotaMode.value && !usesGroupSource.value && form.account_id == null) {
+    appStore.showError(t('admin.channelMonitor.linkedAccountRequired'))
+    return
+  }
+  if (usesProbePart.value && !form.primary_model.trim()) {
     appStore.showError(t('admin.channelMonitor.primaryModelRequired'))
     return
   }
@@ -568,9 +1074,21 @@ async function handleSubmit() {
       // Only send api_key if user typed a new value
       if (api_key) req.api_key = api_key
       // template_id=null 用 clear_template=true 明确告诉后端清空（pointer 语义）
-      if (form.template_id == null) {
+      if (usesProbePart.value && form.template_id == null) {
         req.clear_template = true
         delete req.template_id
+      }
+      // account_id / group_id 同理：update 发 0 显式解绑存量关联（后端 0=清空、
+      // null=不动）。仅 update——create 发 0 会落 &0 触发 FK 违约。
+      // 退回 probe 时两侧都解绑；quota 模式下解绑未选中的那一侧，
+      // 否则从「单账号」改成「分组」的存量监控会留着旧 account_id。
+      if (!usesQuotaMode.value) {
+        req.account_id = 0
+        req.group_id = 0
+      } else if (usesGroupSource.value) {
+        req.account_id = 0
+      } else {
+        req.group_id = 0
       }
       await adminAPI.channelMonitor.update(target.id, req)
       appStore.showSuccess(t('admin.channelMonitor.updateSuccess'))

@@ -116,8 +116,10 @@ func kiroListAvailableProfiles(ctx context.Context, account *Account, token stri
 //
 // 行为：
 //   - API Key 凭据 / 已有真实（非占位符）profileArn → 直接返回，不发起网络请求
+//   - BuilderId / Social 账号（确定无企业 profile）→ 直接回填默认 ARN，跳过 ListAvailableProfiles
+//     （该 API 对 Builder ID 身份必然返回 403，见 kiroAccountLacksEnterpriseProfile）
 //   - 否则调用 ListAvailableProfiles，命中真实 ARN 时写回凭据并持久化到 DB
-//   - 上游无 profile（如 Social/BuilderID 账号）→ 回填默认 ARN（Social → Social ARN，其余 → BuilderID 占位符）并持久化
+//   - 上游无 profile → 回填默认 ARN（Social → Social ARN，其余 → BuilderID 占位符）并持久化
 //   - 进程内去重：同一账号仅首次请求时触发 API 调用，避免重复查询
 func kiroResolveAndPersistProfileArn(ctx context.Context, repo AccountRepository, account *Account, token string) string {
 	if account == nil {
@@ -151,9 +153,15 @@ func kiroResolveAndPersistProfileArn(ctx context.Context, repo AccountRepository
 	once.Do(func() {
 		arn := kiroDefaultProfileARN(account)
 
-		profiles, err := kiroListAvailableProfiles(ctx, account, token)
-		if err != nil {
-			// API 失败（如 BuilderID 账号不支持 ListAvailableProfiles），fallback 到默认 ARN
+		if kiroAccountLacksEnterpriseProfile(account) {
+			// BuilderId / Social 身份没有企业 profile，ListAvailableProfiles 必然 403，
+			// 直接使用默认 ARN，省掉一次注定失败的请求。
+			logger.L().Debug("kiro profileArn resolution skipped for non-enterprise login, using default",
+				zap.Int64("account_id", accountID),
+				zap.String("profile_arn", arn),
+			)
+		} else if profiles, err := kiroListAvailableProfiles(ctx, account, token); err != nil {
+			// API 失败（如凭据被判定为不支持该操作的身份），fallback 到默认 ARN
 			logger.L().Warn("kiro profileArn resolution failed, using default",
 				zap.Int64("account_id", accountID),
 				zap.String("profile_arn", arn),

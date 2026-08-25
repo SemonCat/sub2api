@@ -23,8 +23,9 @@
           >
             {{ providerLabel(item.provider) }}
           </span>
+          <!-- 纯配额模式主模型是占位符 "quota"，展示层替换为本地化「配额」标签 -->
           <span class="font-mono text-xs truncate text-gray-500 dark:text-gray-400">
-            {{ item.primary_model }}
+            {{ formatMonitorModel(item.primary_model) }}
           </span>
           <span
             v-if="item.group_name"
@@ -42,8 +43,9 @@
       </span>
     </div>
 
-    <!-- Metrics -->
+    <!-- 纯配额模式不发 LLM / HEAD，延迟和 PING 恒为空，藏掉避免两块「-」 -->
     <MonitorMetricPair
+      v-if="!quotaOnly"
       primary-icon="bolt"
       :primary-label="t('monitorCommon.dialogLatency')"
       :primary-value="formatLatency(item.primary_latency_ms)"
@@ -52,6 +54,14 @@
       :secondary-label="t('monitorCommon.endpointPing')"
       :secondary-value="formatLatency(item.primary_ping_latency_ms)"
       secondary-unit="ms"
+    />
+
+    <!-- 完整快照受 show_quota 开关约束；组级账号计数即使开关关闭也会下发 -->
+    <MonitorQuotaView
+      v-if="quotaVisible"
+      :snapshot="item.latest_quota"
+      :accounts-only="accountsOnly"
+      class="mt-2"
     />
 
     <!-- Divider -->
@@ -80,16 +90,23 @@ import {
   useChannelMonitorFormat,
   providerGradient,
 } from '@/composables/useChannelMonitorFormat'
+import { isChannelMonitorQuotaVisible } from '@/utils/featureFlags'
 import ProviderIcon from './ProviderIcon.vue'
 import MonitorMetricPair from './MonitorMetricPair.vue'
 import MonitorAvailabilityRow from './MonitorAvailabilityRow.vue'
 import MonitorTimeline from './MonitorTimeline.vue'
+import MonitorQuotaView from '@/components/common/MonitorQuotaView.vue'
 
+// 图标配色与 utils/platformColors.ts 的平台色对齐（新 4 家）。
 const PROVIDER_TINT: Record<string, string> = {
   openai: 'text-emerald-600 dark:text-emerald-300',
   anthropic: 'text-orange-600 dark:text-orange-300',
   gemini: 'text-sky-600 dark:text-sky-300',
   grok: 'text-zinc-700 dark:text-zinc-200',
+  antigravity: 'text-purple-600 dark:text-purple-300',
+  kimi: 'text-pink-600 dark:text-pink-300',
+  zhipu: 'text-indigo-600 dark:text-indigo-300',
+  deepseek: 'text-teal-600 dark:text-teal-300',
 }
 
 const props = defineProps<{
@@ -110,11 +127,29 @@ const {
   providerLabel,
   providerBadgeClass,
   formatLatency,
+  formatMonitorModel,
 } = useChannelMonitorFormat()
 
 const providerTintClass = computed(() =>
   PROVIDER_TINT[props.item.provider] ?? 'text-gray-500 dark:text-gray-300'
 )
+
+const quotaOnly = computed(() => {
+  if (props.item.check_mode === 'quota') return true
+  // 旧响应没有 check_mode 时，主模型占位符 "quota" 也是纯配额卡。
+  return !props.item.check_mode && props.item.primary_model === 'quota'
+})
+
+const showFullQuota = computed(() => isChannelMonitorQuotaVisible())
+
+const accountsOnly = computed(() => !showFullQuota.value)
+
+const quotaVisible = computed(() => {
+  const snapshot = props.item.latest_quota
+  if (!snapshot) return false
+  if (showFullQuota.value) return true
+  return (snapshot.accounts_total ?? 0) > 0
+})
 
 const availabilityLabel = computed(() => {
   const win = t(`channelStatus.windowTab.${props.window}`)
