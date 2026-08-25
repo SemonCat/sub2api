@@ -121,6 +121,8 @@ func TestAccountTestService_KiroIDCWithoutProfileArnOmitsProfileArnAndUsesDefaul
 	upstream := &queuedHTTPUpstream{
 		responses: []*http.Response{
 			newJSONResponse(http.StatusUnauthorized, `{"type":"error","error":{"message":"Invalid bearer token"}}`),
+			newJSONResponse(http.StatusUnauthorized, `{"type":"error","error":{"message":"Invalid bearer token"}}`),
+			newJSONResponse(http.StatusUnauthorized, `{"type":"error","error":{"message":"Invalid bearer token"}}`),
 		},
 	}
 	svc := &AccountTestService{
@@ -132,8 +134,11 @@ func TestAccountTestService_KiroIDCWithoutProfileArnOmitsProfileArnAndUsesDefaul
 
 	err := svc.TestAccountConnection(ctx, account.ID, "claude-sonnet-4-6", "", AccountTestModeDefault)
 	require.Error(t, err)
-	require.Len(t, upstream.requests, 1)
-	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Len(t, upstream.requests, 3)
+	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, kiroCodeWhispererTarget, upstream.requests[0].Header.Get("X-Amz-Target"))
+	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[1].URL.Host)
+	require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[2].URL.Host)
 	body, readErr := io.ReadAll(upstream.requests[0].Body)
 	require.NoError(t, readErr)
 	require.NotContains(t, string(body), `"profileArn":`)

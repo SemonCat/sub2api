@@ -408,9 +408,12 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 	maxRetries := 2
 
 	for idx, endpoint := range endpoints {
-		// 按端点维度构建 payload：Q 端点 profileArn 为空，KRS 端点需要 profileArn
+		// Build the payload per auth surface. CodeWhisperer and KRS need the
+		// account-bound profile ARN; Q keeps the existing no-profile body.
 		var profileArn string
-		if endpoint.Name == "KiroRuntime" {
+		if endpoint.Name == "CodeWhisperer" {
+			profileArn = resolveKiroPayloadProfileArn(account)
+		} else if endpoint.Name == "KiroRuntime" {
 			profileArn = kiroResolveProfileArnForKRS(account)
 		}
 		buildResult, err := s.buildKiroPayloadForAccountWithArn(ctx, account, parsed, anthropicBody, modelID, currentToken, requestModel, headers, profileArn)
@@ -513,7 +516,9 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
 						// 凭据可能已被 token 刷新更新，重新解析当前端点的 profileArn
-						if endpoint.Name == "KiroRuntime" {
+						if endpoint.Name == "CodeWhisperer" {
+							profileArn = resolveKiroPayloadProfileArn(account)
+						} else if endpoint.Name == "KiroRuntime" {
 							profileArn = kiroResolveProfileArnForKRS(account)
 						} else {
 							profileArn = ""
@@ -534,6 +539,13 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 						resetHTTPResponseBody(resp, respBody)
 						return resp, requestCtx, nil
 					}
+				}
+
+				// A 401/403 can mean that this valid credential belongs to a
+				// different Kiro auth surface, not that the account is invalid.
+				// Try the next configured surface before disabling the account.
+				if idx+1 < len(endpoints) {
+					break
 				}
 
 				if classifyKiroHTTPError(resp.StatusCode, string(respBody)).Category == kiroErrorAuthError {
@@ -572,6 +584,8 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 // KRS 仅支持 us-east-1 / eu-central-1 两个 region；这里固定走 us-east-1。
 const kiroKRSEndpointURL = "https://runtime.us-east-1.kiro.dev/generateAssistantResponse"
 
+const kiroCodeWhispererTarget = "AmazonCodeWhispererStreamingService.GenerateAssistantResponse"
+
 func buildKiroEndpoints(account *Account, mode string) []kiroEndpointConfig {
 	if mode == KiroEndpointModeKRS {
 		return []kiroEndpointConfig{
@@ -587,7 +601,29 @@ func buildKiroEndpoints(account *Account, mode string) []kiroEndpointConfig {
 		Name: "AmazonQ",
 	}
 	if mode == KiroEndpointModeAuto {
-		// auto 模式：Q 优先；429、408/5xx 等可重试上游错误会切换到 KRS。
+		// IAM Identity Center / external IdP tokens belong to the CodeWhisperer
+		// auth surface. Amazon Q can reject the same valid token with 403
+		// "User is not authorized". Match Kiro-capable routers by trying the
+		// CodeWhisperer streaming surface first, then Q and KRS as fallbacks.
+		authMethod := ""
+		if account != nil {
+			authMethod = strings.ToLower(strings.TrimSpace(account.GetCredential("auth_method")))
+		}
+		if authMethod == "idc" || authMethod == "external_idp" {
+			return []kiroEndpointConfig{
+				{
+					URL:       fmt.Sprintf("https://codewhisperer.%s.amazonaws.com/generateAssistantResponse", region),
+					Name:      "CodeWhisperer",
+					AmzTarget: kiroCodeWhispererTarget,
+				},
+				qEndpoint,
+				{
+					URL:  kiroKRSEndpointURL,
+					Name: "KiroRuntime",
+				},
+			}
+		}
+		// Other OAuth methods keep the existing Q → KRS behavior.
 		return []kiroEndpointConfig{
 			qEndpoint,
 			{
