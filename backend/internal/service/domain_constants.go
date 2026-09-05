@@ -44,13 +44,13 @@ const (
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
 	// 国产 OpenAI 兼容供应商（与 grok 一样经 OpenAI 网关转发）。
-	PlatformKimi      = domain.PlatformKimi
-	PlatformZhipu     = domain.PlatformZhipu
-	PlatformDeepseek  = domain.PlatformDeepseek
+	PlatformKimi     = domain.PlatformKimi
+	PlatformZhipu    = domain.PlatformZhipu
+	PlatformDeepseek = domain.PlatformDeepseek
 	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
 	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
-	PlatformKiro        = domain.PlatformKiro
-	PlatformComposite   = domain.PlatformComposite
+	PlatformKiro      = domain.PlatformKiro
+	PlatformComposite = domain.PlatformComposite
 )
 
 // 账号接入模式（国产供应商）：按量付费 vs Coding Plan。

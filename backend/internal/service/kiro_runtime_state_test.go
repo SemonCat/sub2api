@@ -619,6 +619,61 @@ func TestExecuteKiroUpstreamAutoSwitchesFromQ429ToKRS(t *testing.T) {
 	require.Contains(t, string(krsBody), `"profileArn":"`+profileARN+`"`)
 }
 
+func TestExecuteKiroUpstreamAutoIDCFallsBackAcrossAuthSurfacesOn403(t *testing.T) {
+	account := &Account{
+		ID:          44,
+		Platform:    PlatformKiro,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"auth_method": "idc",
+			"api_region":  "us-east-1",
+			"profile_arn": "arn:aws:codewhisperer:us-east-1:123456789012:profile/AUTO",
+		},
+	}
+	upstream := &queuedHTTPUpstream{
+		responses: []*http.Response{
+			newJSONResponse(http.StatusForbidden, `{"message":"User is not authorized to make this call.","reason":null}`),
+			newJSONResponse(http.StatusForbidden, `{"message":"User is not authorized to make this call."}`),
+			newJSONResponse(http.StatusOK, `{"ok":true}`),
+		},
+	}
+	svc := &GatewayService{
+		httpUpstream:        upstream,
+		kiroCooldownStore:   &stubKiroCooldownStore{},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	parsed := &ParsedRequest{
+		Group: &Group{
+			Platform:         PlatformKiro,
+			KiroEndpointMode: KiroEndpointModeAuto,
+		},
+	}
+
+	payload, err := createTestPayload("gpt-5.6-sol")
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	resp, _, err := svc.executeKiroUpstreamWithParsed(context.Background(), account, parsed, payloadBytes, "gpt-5.6-sol", "gpt-5.6-sol", "test-token", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, upstream.requests, 3)
+	require.Equal(t, "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse", upstream.requests[0].URL.String())
+	require.Equal(t, "AmazonCodeWhispererStreamingService.GenerateAssistantResponse", upstream.requests[0].Header.Get("X-Amz-Target"))
+	require.Equal(t, "https://q.us-east-1.amazonaws.com/generateAssistantResponse", upstream.requests[1].URL.String())
+	require.Equal(t, kiroKRSEndpointURL, upstream.requests[2].URL.String())
+	// All fallback surfaces need the account-bound ARN after the upstream merge.
+	// Checking only the first request misses a Q payload rebuilt without its ARN.
+	for _, req := range upstream.requests {
+		body, readErr := io.ReadAll(req.Body)
+		require.NoError(t, readErr)
+		require.Contains(t, string(body), `"profileArn":"arn:aws:codewhisperer:us-east-1:123456789012:profile/AUTO"`)
+	}
+}
+
 func TestHandleKiroHTTPErrorOAuthInvalidModelRateLimitsAndFailovers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

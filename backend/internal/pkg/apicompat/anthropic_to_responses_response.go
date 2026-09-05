@@ -257,8 +257,7 @@ func FinalizeAnthropicResponsesStream(state *AnthropicEventToResponsesState) []R
 	// Close any open item
 	events = append(events, closeCurrentResponsesItem(state)...)
 
-	status, incompleteDetails := anthropicResponsesStreamTerminalState(state.StopReason)
-	events = append(events, makeResponsesCompletedEvent(state, status, incompleteDetails))
+	events = append(events, makeResponsesTerminalEvent(state))
 	state.CompletedSent = true
 	return events
 }
@@ -565,8 +564,7 @@ func anthToResHandleMessageStop(state *AnthropicEventToResponsesState) []Respons
 	var events []ResponsesStreamEvent
 	events = append(events, closeCurrentResponsesItem(state)...)
 
-	status, incompleteDetails := anthropicResponsesStreamTerminalState(state.StopReason)
-	events = append(events, makeResponsesCompletedEvent(state, status, incompleteDetails))
+	events = append(events, makeResponsesTerminalEvent(state))
 	state.CompletedSent = true
 	return events
 }
@@ -578,6 +576,21 @@ func anthropicResponsesStreamTerminalState(stopReason string) (string, *Response
 		return "incomplete", &ResponsesIncompleteDetails{Reason: "max_output_tokens"}
 	}
 	return "completed", nil
+}
+
+func makeResponsesTerminalEvent(state *AnthropicEventToResponsesState) ResponsesStreamEvent {
+	status, incompleteDetails := anthropicResponsesStreamTerminalState(state.StopReason)
+	if status == "completed" && len(state.Outputs) == 0 && state.OutputTokens == 0 {
+		evt := makeResponsesCompletedEvent(state, "failed", nil)
+		evt.Type = "response.failed"
+		evt.Response.Status = "failed"
+		evt.Response.Error = &ResponsesError{
+			Code:    "upstream_empty_response",
+			Message: "Upstream completed without output",
+		}
+		return evt
+	}
+	return makeResponsesCompletedEvent(state, status, incompleteDetails)
 }
 
 func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []ResponsesStreamEvent {

@@ -121,6 +121,8 @@ func TestAccountTestService_KiroIDCWithoutProfileArnUsesDefaultProfileArnAndDefa
 	upstream := &queuedHTTPUpstream{
 		responses: []*http.Response{
 			newJSONResponse(http.StatusUnauthorized, `{"type":"error","error":{"message":"Invalid bearer token"}}`),
+			newJSONResponse(http.StatusUnauthorized, `{"type":"error","error":{"message":"Invalid bearer token"}}`),
+			newJSONResponse(http.StatusUnauthorized, `{"type":"error","error":{"message":"Invalid bearer token"}}`),
 		},
 	}
 	svc := &AccountTestService{
@@ -132,12 +134,22 @@ func TestAccountTestService_KiroIDCWithoutProfileArnUsesDefaultProfileArnAndDefa
 
 	err := svc.TestAccountConnection(ctx, account.ID, "claude-sonnet-4-6", "", AccountTestModeDefault)
 	require.Error(t, err)
-	require.Len(t, upstream.requests, 1)
-	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
-	body, readErr := io.ReadAll(upstream.requests[0].Body)
-	require.NoError(t, readErr)
-	// Builder ID / 无企业 profile 的账号回退占位符 ARN（现在 Q 端点也必须带 profileArn）。
-	require.Contains(t, string(body), kiroBuilderIDProfileARN)
+	require.Len(t, upstream.requests, 3)
+	require.Equal(t, "codewhisperer.us-east-1.amazonaws.com", upstream.requests[0].URL.Host)
+	require.Equal(t, kiroCodeWhispererTarget, upstream.requests[0].Header.Get("X-Amz-Target"))
+	require.Equal(t, "q.us-east-1.amazonaws.com", upstream.requests[1].URL.Host)
+	require.Equal(t, "runtime.us-east-1.kiro.dev", upstream.requests[2].URL.Host)
+	// CodeWhisperer retains the live branch's account-bound ARN policy;
+	// Q and KRS need upstream's placeholder when no real ARN is available.
+	for i, req := range upstream.requests {
+		body, readErr := io.ReadAll(req.Body)
+		require.NoError(t, readErr)
+		if i == 0 {
+			require.NotContains(t, string(body), `"profileArn":`)
+		} else {
+			require.Contains(t, string(body), kiroBuilderIDProfileARN)
+		}
+	}
 }
 
 func TestAccountTestService_KiroInvalidModelErrorPassthrough(t *testing.T) {

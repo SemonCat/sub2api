@@ -628,24 +628,36 @@ func formatKiroTestError(statusCode int, body []byte, requestedModel string, acc
 func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, account *Account, anthropicBody []byte, mappedModel, token string) (*http.Response, error) {
 	modelID := kiropkg.MapModel(mappedModel)
 	currentToken := token
-	// generateAssistantResponse 现在强制要求 profileArn（缺失 → 403 "User is not
-	// authorized to make this call."）。按账号类型解析：API Key → 空；
-	// 其余 凭据真实 ARN > Social ARN > Builder ID 占位符。
-	profileArn := kiroResolveRequestProfileArn(account)
 	preparedBody := prepareKiroPayloadBodyForRequestModel(anthropicBody, mappedModel)
-	buildResult, err := kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
-	if err != nil {
-		return nil, err
-	}
-	payload := buildResult.Payload
 
-	// 账号连通性测试默认走 AWS Q endpoint（group 级 q/krs 选择作用于真实流量）。
-	endpoints := buildKiroEndpoints(account, KiroEndpointModeQ)
+	// Test IdC/external-IdP accounts against the same auth-aware chain as real
+	// auto-mode traffic. Other account types retain the established Q-only test.
+	endpointMode := KiroEndpointModeQ
+	if account != nil && account.Type == AccountTypeOAuth {
+		authMethod := strings.ToLower(strings.TrimSpace(account.GetCredential("auth_method")))
+		if authMethod == "idc" || authMethod == "external_idp" {
+			endpointMode = KiroEndpointModeAuto
+		}
+	}
+	endpoints := buildKiroEndpoints(account, endpointMode)
 	proxyURL := kiroProxyURL(account)
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 	accountKey := buildKiroAccountKey(account)
 	maxRetries := 2
 	for idx, endpoint := range endpoints {
+		profileArn := kiroResolveRequestProfileArn(account)
+		switch endpoint.Name {
+		case "CodeWhisperer":
+			profileArn = resolveKiroPayloadProfileArn(account)
+		case "KiroRuntime":
+			profileArn = kiroResolveProfileArnForKRS(account)
+		}
+		buildResult, err := kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
+		if err != nil {
+			return nil, err
+		}
+		payload := buildResult.Payload
+
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			req, err := newKiroJSONRequest(ctx, endpoint.URL, payload, currentToken, accountKey, buildKiroMachineID(account), endpoint.AmzTarget, account)
 			if err != nil {
@@ -678,6 +690,9 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 						currentToken = refreshedToken
 						accountKey = buildKiroAccountKey(account)
 						profileArn = kiroResolveRequestProfileArn(account)
+						if endpoint.Name == "CodeWhisperer" {
+							profileArn = resolveKiroPayloadProfileArn(account)
+						}
 						buildResult, err = kiropkg.BuildKiroPayloadWithContext(preparedBody, modelID, profileArn, "AI_EDITOR", nil)
 						if err != nil {
 							return nil, err
@@ -685,6 +700,10 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 						payload = buildResult.Payload
 						continue
 					}
+				}
+
+				if idx+1 < len(endpoints) {
+					break
 				}
 
 				resetHTTPResponseBody(resp, respBody)

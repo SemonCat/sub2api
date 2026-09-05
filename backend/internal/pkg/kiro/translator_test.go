@@ -735,6 +735,21 @@ func TestParseNonStreamingEventStreamFallsBackToEstimatedInputTokens(t *testing.
 	require.Equal(t, 207, withCache.Usage.InputTokens)
 	require.Equal(t, int64(207), gjson.GetBytes(withCache.ResponseBody, "usage.input_tokens").Int())
 	require.Equal(t, int64(1755), gjson.GetBytes(withCache.ResponseBody, "usage.cache_creation_input_tokens").Int())
+
+	// A full cache hit legitimately has zero uncached input tokens. The estimated
+	// fallback must not turn that zero back into the full prompt size, otherwise
+	// input_tokens + cache_read_input_tokens double-counts the same prompt.
+	fullCacheHit, err := ParseNonStreamingEventStreamWithContext(newStream(), "gpt-5.6-sol", KiroRequestContext{
+		EstimatedInputTokens: 1962,
+		CacheEmulationUsage: &Usage{
+			InputTokens:          0,
+			CacheReadInputTokens: 1962,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, fullCacheHit.Usage.InputTokens)
+	require.Equal(t, int64(0), gjson.GetBytes(fullCacheHit.ResponseBody, "usage.input_tokens").Int())
+	require.Equal(t, int64(1962), gjson.GetBytes(fullCacheHit.ResponseBody, "usage.cache_read_input_tokens").Int())
 }
 
 func TestParseNonStreamingEventStreamRejectsTrailingJSONValueInToolInput(t *testing.T) {
@@ -3133,4 +3148,31 @@ func TestBuildKiroPayloadTrailingAssistantThenSystemStillAttachesTools(t *testin
 	require.Equal(t, "Continue", gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.content").String())
 	require.Greater(t, gjson.GetBytes(payload, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools.#").Int(), int64(0))
 	require.Contains(t, gjson.GetBytes(payload, "conversationState.history.0.userInputMessage.content").String(), "TRAILING NOTE")
+}
+
+func TestBuildKiroPayloadChangingSuffixPreservesSystemAndToolOrder(t *testing.T) {
+	t.Setenv("SUB2API_KIRO_TIME_CONTEXT", "")
+	build := func(suffix string) []byte {
+		t.Helper()
+		body := []byte(fmt.Sprintf(`{
+			"system":"Fixed reference prefix.",
+			"tools":[
+				{"name":"z_lookup","description":"Lookup Z","input_schema":{"type":"object"}},
+				{"name":"a_lookup","description":"Lookup A","input_schema":{"type":"object"}}
+			],
+			"messages":[{"role":"user","content":%q}]
+		}`, suffix))
+		result, err := BuildKiroPayloadWithContext(body, "gpt-5.6-luna", "", "AI_EDITOR", nil)
+		require.NoError(t, err)
+		return result.Payload
+	}
+	first, second := build("suffix one"), build("suffix two")
+	const current = "conversationState.currentMessage.userInputMessage"
+	const tools = current + ".userInputMessageContext.tools"
+	require.Equal(t, gjson.GetBytes(first, "conversationState.history").Raw, gjson.GetBytes(second, "conversationState.history").Raw)
+	require.Equal(t, gjson.GetBytes(first, tools).Raw, gjson.GetBytes(second, tools).Raw)
+	require.Equal(t, "z_lookup", gjson.GetBytes(second, tools+".0.toolSpecification.name").String())
+	require.Equal(t, "a_lookup", gjson.GetBytes(second, tools+".1.toolSpecification.name").String())
+	require.Equal(t, "suffix one", gjson.GetBytes(first, current+".content").String())
+	require.Equal(t, "suffix two", gjson.GetBytes(second, current+".content").String())
 }

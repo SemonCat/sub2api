@@ -62,7 +62,9 @@ func TestEstimateImageTokensUsesDimensionsNotEncodedLength(t *testing.T) {
 		}
 	}
 	var noisyPNG bytes.Buffer
-	require.NoError(t, png.Encode(&noisyPNG, noisy))
+	// Force different encoded sizes regardless of Go's PNG compression heuristics.
+	encoder := png.Encoder{CompressionLevel: png.NoCompression}
+	require.NoError(t, encoder.Encode(&noisyPNG, noisy))
 	require.Greater(t, noisyPNG.Len(), flatPNG.Len())
 
 	flatTokens := EstimateImageTokens(context.Background(), "image/png", base64.StdEncoding.EncodeToString(flatPNG.Bytes()))
