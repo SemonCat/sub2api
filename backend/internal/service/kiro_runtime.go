@@ -511,6 +511,11 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 					return resp, requestCtx, nil
 				}
 
+				if !isKiroAuthSurfaceError(resp.StatusCode, respBody) {
+					resetHTTPResponseBody(resp, respBody)
+					return resp, requestCtx, nil
+				}
+
 				if s.kiroTokenProvider != nil && (resp.StatusCode == http.StatusUnauthorized || isKiroTokenErrorBody(respBody)) && attempt < maxRetries {
 					refreshedToken, refreshErr := s.kiroTokenProvider.ForceRefreshAccessToken(ctx, account)
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {

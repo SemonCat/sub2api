@@ -66,6 +66,45 @@ func classifyKiroHTTPError(statusCode int, body string) kiroErrorClassification 
 	}
 }
 
+// isKiroAuthSurfaceError admits only authentication failures and the observed
+// generic surface-mismatch 403. The broad legacy token classifier also matches
+// "invalid model"; it must not authorize refresh, fallback, or account penalties.
+func isKiroAuthSurfaceError(statusCode int, body []byte) bool {
+	if statusCode == http.StatusUnauthorized {
+		return true
+	}
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	if isKiroSuspendedBody(body) || looksLikeKiroProfileError(lower) ||
+		looksLikeKiroQuotaExhaustedError(lower) || looksLikeKiroMonthlyRequestCountError(string(body)) {
+		return false
+	}
+	message := strings.TrimSpace(extractUpstreamErrorMessage(body))
+	if message == "" {
+		message = strings.TrimSpace(string(body))
+	}
+	message = strings.TrimSuffix(strings.ToLower(message), ".")
+	if message == "user is not authorized to make this call" {
+		// A concrete denial reason must not be erased by a later auth error.
+		return gjson.GetBytes(body, "reason").String() == "" && gjson.GetBytes(body, "error.reason").String() == ""
+	}
+	if message == "unauthorized" {
+		return true
+	}
+	for _, phrase := range []string{
+		"invalid token", "invalid bearer token", "invalid access token",
+		"expired token", "token expired", "token has expired",
+		"token is expired", "token is invalid", "bearer token invalid",
+	} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 func classifyKiroError(err error) kiroErrorClassification {
 	if err == nil {
 		return kiroErrorClassification{}

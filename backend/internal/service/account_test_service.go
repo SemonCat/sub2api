@@ -684,6 +684,11 @@ func (s *AccountTestService) executeKiroTestUpstream(ctx context.Context, accoun
 					return nil, readErr
 				}
 
+				if !isKiroAuthSurfaceError(resp.StatusCode, respBody) {
+					resetHTTPResponseBody(resp, respBody)
+					return resp, nil
+				}
+
 				if s.kiroTokenProvider != nil && (resp.StatusCode == http.StatusUnauthorized || isKiroTokenErrorBody(respBody)) && attempt < maxRetries {
 					refreshedToken, refreshErr := s.kiroTokenProvider.ForceRefreshAccessToken(ctx, account)
 					if refreshErr == nil && strings.TrimSpace(refreshedToken) != "" {
