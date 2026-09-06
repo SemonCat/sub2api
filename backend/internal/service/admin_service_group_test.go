@@ -487,7 +487,7 @@ func TestAdminService_CreateGroup_PreservesExplicitZeroKiroRatios(t *testing.T) 
 	require.Zero(t, group.KiroCacheEmulationRatio)
 	require.Zero(t, group.KiroCacheCreationEmulationRatio)
 	require.Zero(t, group.KiroCacheReadEmulationRatio)
-	require.False(t, group.EffectiveKiroCacheEmulationEnabled())
+	require.True(t, group.EffectiveKiroCacheEmulationEnabled())
 }
 
 func TestAdminService_CreateAndUpdateGroup_RejectInvalidKiroRatios(t *testing.T) {
@@ -811,7 +811,7 @@ func TestAdminService_UpdateGroup_IndependentModePreservesExplicitZeroRatios(t *
 	require.Equal(t, KiroCacheEmulationModeIndependent, group.KiroCacheEmulationMode)
 	require.Zero(t, group.KiroCacheCreationEmulationRatio)
 	require.Zero(t, group.KiroCacheReadEmulationRatio)
-	require.False(t, group.EffectiveKiroCacheEmulationEnabled())
+	require.True(t, group.EffectiveKiroCacheEmulationEnabled())
 }
 
 func TestAdminService_UpdateGroup_OldClientPreservesIndependentRatios(t *testing.T) {

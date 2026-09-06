@@ -116,8 +116,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		if parsed != nil {
 			group = parsed.Group
 		}
-		cachePlan := s.prepareKiroChatCompletionsCacheEmulationUsage(ctx, account, group, body, mappedModel, estimateKiroInputTokens(ctx, anthropicBody))
-		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, parsed, anthropicBody, mappedModel, originalModel, c.Request.Header, group, cachePlan)
+		resp, _, err = s.openKiroAnthropicStreamResponse(ctx, account, parsed, anthropicBody, mappedModel, originalModel, c.Request.Header, group, nil)
 		if err != nil {
 			var failoverErr *UpstreamFailoverError
 			if errors.As(err, &failoverErr) {

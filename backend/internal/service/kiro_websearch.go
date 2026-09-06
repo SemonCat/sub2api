@@ -110,7 +110,7 @@ func writeAnthropicMessageStart(w io.Writer, msgID, model string, inputTokens in
 // until Kiro accepts the first model request. Compatibility gateways can then
 // fail over to another account instead of committing a synthetic HTTP 200 first.
 func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
-	ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, plan *kiroCacheEmulationPlan, ready func(error),
+	ctx context.Context, account *Account, anthropicBody []byte, mappedModel, requestModel, token string, inputTokens int, headers http.Header, w io.Writer, group *Group, ready func(error),
 ) (retErr error) {
 	var readyOnce sync.Once
 	notifyReady := func(err error) {
@@ -138,7 +138,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	nextContentBlockIndex := 0
 
-	if err := writeAnthropicMessageStart(streamWriter, "", requestModel, inputTokens, plan.result()); err != nil {
+	if err := writeAnthropicMessageStart(streamWriter, "", requestModel, inputTokens, nil); err != nil {
 		return err
 	}
 
@@ -163,7 +163,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
 			return errKiroWebSearchFallback
 		}
 
-		resp, _, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
+		resp, requestCtx, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
 		if err != nil {
 			return err
 		}
@@ -171,8 +171,6 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
 			return &kiroWebSearchHTTPError{Response: resp}
 		}
 		if iteration == 0 {
-			// 首轮请求已确认成功，此时提交缓存前缀落盘才是安全的。
-			plan.commit()
 			if ready != nil {
 				notifyReady(nil)
 				if _, err := io.Copy(w, &prelude); err != nil {
@@ -184,7 +182,9 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
 			}
 		}
 
-		chunks, _, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
+		plan := prepareKiroDynamicCache(account, group, requestCtx, estimateKiroInputTokens(ctx, currentBody))
+		defer plan.complete(kiropkg.Usage{}, false)
+		chunks, streamResult, streamErr := func() ([][]byte, *kiropkg.StreamResult, error) {
 			defer func() { _ = resp.Body.Close() }()
 			return bufferKiroAnthropicStream(ctx, resp.Body, requestModel, inputTokens)
 		}()
@@ -192,6 +192,7 @@ func (s *GatewayService) streamKiroWebSearchAsAnthropicWithReady(
 			return streamErr
 		}
 
+		plan.complete(streamResult.Usage, ctx.Err() == nil)
 		analysis := kiropkg.AnalyzeBufferedStream(chunks)
 		if analysis.HasWebSearchToolUse && strings.TrimSpace(analysis.WebSearchQuery) != "" && iteration+1 < kiroMaxWebSearchIterations {
 			filtered := kiropkg.FilterChunksForClient(chunks, analysis.WebSearchToolUseIndex, nextContentBlockIndex)
@@ -240,8 +241,6 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 	currentToolUseID := "srvtoolu_" + kiropkg.GenerateToolUseID()
 	searches := make([]kiropkg.SearchIndicator, 0, 2)
 	requestID := ""
-	var cacheUsage *kiroCacheEmulationUsage
-	cacheUsageResolved := false
 
 	for iteration := 0; iteration < kiroMaxWebSearchIterations; iteration++ {
 		s.prefetchKiroWebSearchDescription(ctx, account, token)
@@ -264,7 +263,7 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 			return nil, errKiroWebSearchFallback
 		}
 
-		resp, _, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
+		resp, requestCtx, err := s.executeKiroUpstream(ctx, account, currentBody, mappedModel, requestModel, token, headers)
 		if err != nil {
 			return nil, err
 		}
@@ -272,20 +271,18 @@ func (s *GatewayService) executeKiroWebSearch(ctx context.Context, account *Acco
 			return nil, &kiroWebSearchHTTPError{Response: resp}
 		}
 
+		plan := prepareKiroDynamicCache(account, group, requestCtx, estimateKiroInputTokens(ctx, currentBody))
+		defer plan.complete(kiropkg.Usage{}, false)
+		// Search has its own MCP charges and synthetic prelude; keep public
+		// search usage conservative while observing each native generation.
 		parseResult, parseErr := func() (*kiropkg.ParseResult, error) {
 			defer func() { _ = resp.Body.Close() }()
-			if !cacheUsageResolved {
-				cacheUsage = s.buildKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
-				cacheUsageResolved = true
-			}
-			return kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, requestModel, kiropkg.KiroRequestContext{
-				CacheEmulationUsage:  cacheUsage.toKiroUsage(),
-				EstimatedInputTokens: inputTokens,
-			})
+			return kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, requestModel, kiropkg.KiroRequestContext{EstimatedInputTokens: inputTokens})
 		}()
 		if parseErr != nil {
 			return nil, parseErr
 		}
+		plan.complete(parseResult.Usage, ctx.Err() == nil)
 		if requestID == "" {
 			requestID = buildKiroRequestID(resp)
 		}

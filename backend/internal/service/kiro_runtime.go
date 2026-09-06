@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -240,8 +241,9 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		return nil, s.handleKiroHTTPError(ctx, resp, c, account, mappedModel, body)
 	}
 
-	cacheUsage := s.buildKiroCacheEmulationUsage(ctx, account, parsed.Group, body, mappedModel, inputTokens)
-	requestCtx.CacheEmulationUsage = cacheUsage.toKiroUsage()
+	plan := prepareKiroDynamicCache(account, parsed.Group, requestCtx, inputTokens)
+	defer plan.complete(kiropkg.Usage{}, false)
+	requestCtx.CacheEmulationUsage = plan.result().toKiroUsage()
 	requestCtx.EstimatedInputTokens = inputTokens
 	parseResult, err := kiropkg.ParseNonStreamingEventStreamWithContext(resp.Body, originalModel, requestCtx)
 	if err != nil {
@@ -255,6 +257,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 		return nil, err
 	}
 
+	plan.complete(parseResult.Usage, ctx.Err() == nil)
 	c.Header("Content-Type", "application/json")
 	requestID := buildKiroRequestID(resp)
 	claudeReqID := kiropkg.NewClaudeRequestID()
@@ -274,7 +277,7 @@ func (s *GatewayService) forwardKiroMessages(ctx context.Context, c *gin.Context
 	}, nil
 }
 
-func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group, cachePlanOverride *kiroCacheEmulationPlan) (*http.Response, int, error) {
+func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, account *Account, parsed *ParsedRequest, anthropicBody []byte, mappedModel, requestModel string, headers http.Header, group *Group, _ *kiroCacheEmulationPlan) (*http.Response, int, error) {
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, 0, err
@@ -292,10 +295,6 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 
 	inputTokens := estimateKiroInputTokens(ctx, anthropicBody)
 	if isOnlyWebSearchToolInBody(anthropicBody) {
-		plan := cachePlanOverride
-		if plan == nil {
-			plan = s.prepareKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
-		}
 		pr, pw := io.Pipe()
 		ready := make(chan error, 1)
 		headers := make(http.Header)
@@ -311,7 +310,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 				inputTokens,
 				headers,
 				pw,
-				plan,
+				group,
 				func(err error) { ready <- err },
 			)
 			if streamErr != nil {
@@ -347,12 +346,7 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, inputTokens, nil
 	}
-	plan := cachePlanOverride
-	if plan == nil {
-		plan = s.prepareKiroCacheEmulationUsage(ctx, account, group, anthropicBody, mappedModel, inputTokens)
-	}
-	// 请求已确认成功(2xx)，此时提交缓存前缀落盘才是安全的。
-	plan.commit()
+	plan := prepareKiroDynamicCache(account, group, requestCtx, inputTokens)
 	requestCtx.CacheEmulationUsage = plan.result().toKiroUsage()
 
 	pr, pw := io.Pipe()
@@ -364,12 +358,15 @@ func (s *GatewayService) openKiroAnthropicStreamResponse(ctx context.Context, ac
 
 	go func() {
 		defer func() { _ = resp.Body.Close() }()
-		_, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(upstreamCtx, resp.Body, pw, requestModel, inputTokens, requestCtx)
+		defer plan.complete(kiropkg.Usage{}, false)
+		streamResult, streamErr := kiropkg.StreamEventStreamAsAnthropicWithContext(upstreamCtx, resp.Body, pw, requestModel, inputTokens, requestCtx)
 		if streamErr != nil {
+			plan.complete(kiropkg.Usage{}, false)
 			_, _ = io.WriteString(pw, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"stream interrupted\"}}\n\n")
 			_ = pw.CloseWithError(streamErr)
 			return
 		}
+		plan.complete(streamResult.Usage, upstreamCtx.Err() == nil)
 		_ = pw.Close()
 	}()
 
@@ -576,6 +573,11 @@ func (s *GatewayService) executeKiroUpstreamWithParsed(ctx context.Context, acco
 			}
 
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				requestCtx.CachePayload = payload
+				requestCtx.CacheEndpoint = endpoint.URL
+				if account.Type == AccountTypeAPIKey {
+					requestCtx.CachePrincipalHash = sha256.Sum256([]byte(currentToken))
+				}
 				if err := s.markKiroSuccess(ctx, account.ID, accountKey); err != nil {
 					_ = resp.Body.Close()
 					return nil, requestCtx, err

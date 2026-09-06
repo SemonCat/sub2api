@@ -304,7 +304,7 @@ func TestForwardAsChatCompletions_KiroCacheEmulation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, firstResult)
 	require.Equal(t, 0, firstResult.Usage.CacheReadInputTokens)
-	require.Greater(t, firstResult.Usage.CacheCreationInputTokens, 0)
+	require.Zero(t, firstResult.Usage.CacheCreationInputTokens)
 
 	secondRecorder := httptest.NewRecorder()
 	secondCtx, _ := gin.CreateTestContext(secondRecorder)
@@ -313,13 +313,13 @@ func TestForwardAsChatCompletions_KiroCacheEmulation(t *testing.T) {
 	secondResult, err := service.ForwardAsChatCompletions(context.Background(), secondCtx, account, secondBody, parsed)
 	require.NoError(t, err)
 	require.NotNil(t, secondResult)
-	require.Greater(t, secondResult.Usage.CacheReadInputTokens, 0)
-	require.Greater(t, secondResult.Usage.CacheCreationInputTokens, 0)
+	require.Zero(t, secondResult.Usage.CacheReadInputTokens)
+	require.Zero(t, secondResult.Usage.CacheCreationInputTokens)
 
 	responseBody := secondRecorder.Body.String()
-	require.Contains(t, responseBody, `"prompt_tokens_details"`)
-	require.Contains(t, responseBody, `"cached_tokens"`)
-	require.Contains(t, responseBody, `"cache_creation_tokens"`)
+	require.NotContains(t, responseBody, `"prompt_tokens_details"`)
+	require.NotContains(t, responseBody, `"cached_tokens"`)
+	require.NotContains(t, responseBody, `"cache_creation_tokens"`)
 }
 
 type noopKiroChatCooldownStore struct{}

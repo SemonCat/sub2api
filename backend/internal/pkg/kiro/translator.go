@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"math"
 	"net/http"
@@ -91,7 +92,13 @@ type Usage struct {
 	CacheCreation5mInputTokens int
 	CacheCreation1hInputTokens int
 	KiroCredits                float64
+	cacheObservationInvalid    bool
+	nativeMetered              bool
 }
+
+// CacheObservationComplete requires native metering; clean EOF and successful
+// client writes are additionally enforced by the caller before learning.
+func (u Usage) CacheObservationComplete() bool { return u.nativeMetered && !u.cacheObservationInvalid }
 
 type StreamResult struct {
 	Usage         Usage
@@ -106,6 +113,9 @@ type ParseResult struct {
 }
 
 type KiroRequestContext struct {
+	CachePrincipalHash       [32]byte `json:"-"`
+	CachePayload             []byte   `json:"-"`
+	CacheEndpoint            string   `json:"-"`
 	ToolNameMap              map[string]string
 	ThinkingEnabled          bool
 	CacheEmulationUsage      *Usage
@@ -229,8 +239,9 @@ type toolUseState struct {
 }
 
 type eventStreamMessage struct {
-	EventType string
-	Payload   []byte
+	ObservationInvalid bool
+	EventType          string
+	Payload            []byte
 }
 
 type kiroSemanticEventType string
@@ -1235,18 +1246,26 @@ func StreamEventStreamAsAnthropicWithContext(ctx context.Context, body io.Reader
 		if err != nil {
 			return nil, err
 		}
-		if msg == nil || len(msg.Payload) == 0 {
+		if msg == nil {
 			continue
 		}
 
+		if msg.ObservationInvalid || strings.Contains(strings.ToLower(msg.EventType), "exception") || strings.Contains(strings.ToLower(msg.EventType), "error") {
+			usage.cacheObservationInvalid = true
+		}
+		if len(msg.Payload) == 0 {
+			continue
+		}
 		var event map[string]any
 		decoder := json.NewDecoder(bytes.NewReader(msg.Payload))
 		decoder.UseNumber()
 		if err := decoder.Decode(&event); err != nil {
+			usage.cacheObservationInvalid = true
 			continue
 		}
 		var trailing any
 		if err := decoder.Decode(&trailing); err != io.EOF {
+			usage.cacheObservationInvalid = true
 			continue
 		}
 
@@ -2987,18 +3006,26 @@ func parseEventStream(body io.Reader) (string, []KiroToolUse, Usage, string, err
 		if err != nil {
 			return "", nil, usage, stopReason, err
 		}
-		if msg == nil || len(msg.Payload) == 0 {
+		if msg == nil {
 			continue
 		}
 
+		if msg.ObservationInvalid || strings.Contains(strings.ToLower(msg.EventType), "exception") || strings.Contains(strings.ToLower(msg.EventType), "error") {
+			usage.cacheObservationInvalid = true
+		}
+		if len(msg.Payload) == 0 {
+			continue
+		}
 		var event map[string]any
 		decoder := json.NewDecoder(bytes.NewReader(msg.Payload))
 		decoder.UseNumber()
 		if err := decoder.Decode(&event); err != nil {
+			usage.cacheObservationInvalid = true
 			continue
 		}
 		var trailing any
 		if err := decoder.Decode(&trailing); err != io.EOF {
+			usage.cacheObservationInvalid = true
 			continue
 		}
 		if sr := readStopReason(event); sr != "" {
@@ -3557,18 +3584,24 @@ func readEventStreamMessage(reader *bufio.Reader) (*eventStreamMessage, error) {
 		return nil, err
 	}
 	eventType := extractEventType(remaining[:headersLength])
+	messageType := extractEventStreamHeader(remaining[:headersLength], ":message-type")
+	crc := crc32.Update(crc32.ChecksumIEEE(prelude), crc32.IEEETable, remaining[:len(remaining)-4])
+	invalid := crc32.ChecksumIEEE(prelude[:8]) != binary.BigEndian.Uint32(prelude[8:12]) || crc != binary.BigEndian.Uint32(remaining[len(remaining)-4:]) || messageType == "exception" || messageType == "error"
 	payloadStart := headersLength
 	payloadEnd := uint32(len(remaining)) - 4
 	if payloadStart >= payloadEnd {
-		return &eventStreamMessage{EventType: eventType}, nil
+		return &eventStreamMessage{EventType: eventType, ObservationInvalid: invalid}, nil
 	}
 	return &eventStreamMessage{
-		EventType: eventType,
-		Payload:   remaining[payloadStart:payloadEnd],
+		EventType:          eventType,
+		ObservationInvalid: invalid,
+		Payload:            remaining[payloadStart:payloadEnd],
 	}, nil
 }
 
-func extractEventType(headers []byte) string {
+func extractEventType(headers []byte) string { return extractEventStreamHeader(headers, ":event-type") }
+
+func extractEventStreamHeader(headers []byte, field string) string {
 	offset := 0
 	for offset < len(headers) {
 		nameLen := int(headers[offset])
@@ -3594,7 +3627,7 @@ func extractEventType(headers []byte) string {
 			}
 			value := string(headers[offset : offset+valueLen])
 			offset += valueLen
-			if name == ":event-type" {
+			if name == field {
 				return value
 			}
 			continue
@@ -4339,10 +4372,13 @@ func updateUsageFromEvent(usage *Usage, eventType string, event map[string]any) 
 		usage.TotalTokens = value
 	}
 	if eventType == "meteringEvent" {
+		usage.nativeMetered = true
 		if value, ok := toPositiveFiniteFloat(meta["usage"]); ok {
 			usage.KiroCredits += value
 		} else if value, ok := toPositiveFiniteFloat(event["usage"]); ok {
 			usage.KiroCredits += value
+		} else {
+			usage.cacheObservationInvalid = true
 		}
 	}
 }

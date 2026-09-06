@@ -160,8 +160,8 @@ func (g *Group) EffectiveKiroCacheEmulationEnabled() bool {
 	if g == nil || g.Platform != PlatformKiro || !g.KiroCacheEmulationEnabled {
 		return false
 	}
-	creationRatio, readRatio := g.EffectiveKiroCacheEmulationRatios()
-	return creationRatio > 0 || readRatio > 0
+	// Legacy ratios are retained for configuration compatibility only.
+	return true
 }
 
 func (g *Group) EffectiveKiroAutoStickyEnabled() bool {

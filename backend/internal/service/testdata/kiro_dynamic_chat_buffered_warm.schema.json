@@ -1,0 +1,20 @@
+[
+  "$.choices:array",
+  "$.choices[].finish_reason:string",
+  "$.choices[].index:number",
+  "$.choices[].message.content:string",
+  "$.choices[].message.role:string",
+  "$.choices[].message:object",
+  "$.choices[]:object",
+  "$.created:number",
+  "$.id:string",
+  "$.model:string",
+  "$.object:string",
+  "$.usage.completion_tokens:number",
+  "$.usage.prompt_tokens:number",
+  "$.usage.prompt_tokens_details.cached_tokens:number",
+  "$.usage.prompt_tokens_details:object",
+  "$.usage.total_tokens:number",
+  "$.usage:object",
+  "$:object"
+]

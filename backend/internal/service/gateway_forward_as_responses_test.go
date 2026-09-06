@@ -20,7 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestForwardAsResponsesKiroDirectUsesResponsesCacheProfile(t *testing.T) {
+func TestForwardAsResponsesKiroUnknownModelIsConservative(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetKiroCacheTracker()
 
@@ -62,14 +62,14 @@ func TestForwardAsResponsesKiroDirectUsesResponsesCacheProfile(t *testing.T) {
 	firstResult, err := svc.ForwardAsResponses(firstCtx.Request.Context(), firstCtx, account, body, parsed)
 	require.NoError(t, err)
 	require.Equal(t, 0, firstResult.Usage.CacheReadInputTokens)
-	require.Greater(t, firstResult.Usage.CacheCreationInputTokens, 0)
+	require.Zero(t, firstResult.Usage.CacheCreationInputTokens)
 	require.Equal(t, firstResult.Usage.CacheCreationInputTokens, int(gjson.Get(firstRec.Body.String(), "usage.cache_creation_input_tokens").Int()))
 	require.False(t, gjson.Get(firstRec.Body.String(), "usage.input_tokens_details.cached_tokens").Exists())
 
 	secondCtx, secondRec := newResponsesGatewayTestContext()
 	secondResult, err := svc.ForwardAsResponses(secondCtx.Request.Context(), secondCtx, account, body, parsed)
 	require.NoError(t, err)
-	require.Greater(t, secondResult.Usage.CacheReadInputTokens, 0)
+	require.Zero(t, secondResult.Usage.CacheReadInputTokens)
 	require.Equal(t, 0, secondResult.Usage.CacheCreationInputTokens)
 	require.Equal(t, secondResult.Usage.CacheReadInputTokens, int(gjson.Get(secondRec.Body.String(), "usage.input_tokens_details.cached_tokens").Int()))
 	require.Equal(t, 0, int(gjson.Get(secondRec.Body.String(), "usage.cache_creation_input_tokens").Int()))

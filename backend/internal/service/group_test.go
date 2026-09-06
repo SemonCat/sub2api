@@ -69,7 +69,7 @@ func TestGroup_KiroCacheEmulationModes(t *testing.T) {
 
 	independent.KiroCacheCreationEmulationRatio = 0
 	independent.KiroCacheReadEmulationRatio = 0
-	require.False(t, independent.EffectiveKiroCacheEmulationEnabled())
+	require.True(t, independent.EffectiveKiroCacheEmulationEnabled())
 }
 
 func TestNormalizeKiroCacheEmulationFieldsSynchronizesAndClears(t *testing.T) {
@@ -85,7 +85,7 @@ func TestNormalizeKiroCacheEmulationFieldsSynchronizesAndClears(t *testing.T) {
 	require.Zero(t, uniform.KiroCacheEmulationRatio)
 	require.Zero(t, uniform.KiroCacheCreationEmulationRatio)
 	require.Zero(t, uniform.KiroCacheReadEmulationRatio)
-	require.False(t, uniform.EffectiveKiroCacheEmulationEnabled())
+	require.True(t, uniform.EffectiveKiroCacheEmulationEnabled())
 
 	independent := &Group{
 		Platform:                        PlatformKiro,

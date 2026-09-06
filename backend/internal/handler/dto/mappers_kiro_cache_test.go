@@ -41,7 +41,7 @@ func TestGroupMappersSeparateEffectiveAndAdminKiroCacheConfiguration(t *testing.
 			publicDTO := GroupFromServiceShallow(tt.group)
 			adminDTO := GroupFromServiceAdmin(tt.group)
 
-			require.False(t, publicDTO.KiroCacheEmulationEnabled)
+			require.Equal(t, tt.group.KiroCacheEmulationEnabled, publicDTO.KiroCacheEmulationEnabled)
 			require.Equal(t, tt.group.EffectiveKiroCacheEmulationRatio(), publicDTO.KiroCacheEmulationRatio)
 			require.Zero(t, publicDTO.KiroCacheCreationEmulationRatio)
 			require.Zero(t, publicDTO.KiroCacheReadEmulationRatio)

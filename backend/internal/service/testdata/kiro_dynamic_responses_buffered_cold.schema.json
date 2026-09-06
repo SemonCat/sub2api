@@ -1,0 +1,22 @@
+[
+  "$.created_at:number",
+  "$.id:string",
+  "$.model:string",
+  "$.object:string",
+  "$.output:array",
+  "$.output[].content:array",
+  "$.output[].content[].text:string",
+  "$.output[].content[].type:string",
+  "$.output[].content[]:object",
+  "$.output[].id:string",
+  "$.output[].role:string",
+  "$.output[].status:string",
+  "$.output[].type:string",
+  "$.output[]:object",
+  "$.status:string",
+  "$.usage.input_tokens:number",
+  "$.usage.output_tokens:number",
+  "$.usage.total_tokens:number",
+  "$.usage:object",
+  "$:object"
+]

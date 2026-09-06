@@ -7,11 +7,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"math"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropictokenizer"
@@ -29,8 +27,7 @@ const (
 	kiroCacheMinTokensOpus    = 4096
 	// kiroCacheMinTokensGPT 与 default 同值但语义独立：1024 对齐 OpenAI 官方的最小
 	// 缓存粒度，不应随 default 一起调整。见 kiroMinimumCacheableTokens。
-	kiroCacheMinTokensGPT        = 1024
-	kiroCachePrefixLookbackLimit = 10
+	kiroCacheMinTokensGPT = 1024
 )
 
 type kiroCacheEmulationUsage struct {
@@ -41,192 +38,16 @@ type kiroCacheEmulationUsage struct {
 	CacheCreation1hInputTokens int
 }
 
-type kiroCacheEntry struct {
-	tokens    int
-	ttl       time.Duration
-	expiresAt time.Time
-}
-
-type kiroCacheTracker struct {
-	mu      sync.Mutex
-	entries map[uint64]map[[32]byte]kiroCacheEntry
-}
-
-var globalKiroCacheTracker = &kiroCacheTracker{entries: make(map[uint64]map[[32]byte]kiroCacheEntry)}
-
-// kiroCacheEmulationPlan 把缓存估算拆成"计算"与"落盘"两步：prepare 阶段只读 tracker
-// 得到估算结果，commit() 才会把本次前缀写入 tracker。调用方应在确认上游请求成功后
-// 再 commit()，避免请求失败/未发出时就把内容错误标记为已缓存，污染下一次请求的估算。
-type kiroCacheEmulationPlan struct {
-	usage    *kiroCacheEmulationUsage
-	cacheKey uint64
-	profile  *kiroCacheProfile
-}
-
-func (p *kiroCacheEmulationPlan) result() *kiroCacheEmulationUsage {
-	if p == nil {
-		return nil
-	}
-	return p.usage
-}
-
-func (p *kiroCacheEmulationPlan) commit() {
-	if p == nil || p.profile == nil || p.cacheKey == 0 {
-		return
-	}
-	globalKiroCacheTracker.update(p.cacheKey, p.profile)
-}
-
+// Inbound-only synthetic search has no authoritative native cache observation.
 func (s *GatewayService) buildKiroCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
-	plan := s.prepareKiroCacheEmulationUsage(ctx, account, group, body, model, inputTokens)
-	plan.commit()
-	return plan.result()
-}
-
-func (s *GatewayService) prepareKiroCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationPlan {
-	NormalizeGroupRuntimeFields(group)
-	if group == nil || !group.EffectiveKiroCacheEmulationEnabled() || account == nil || account.ID <= 0 || len(body) == 0 {
-		return nil
-	}
-	profile, ok := buildKiroCacheProfile(ctx, body, model, inputTokens)
-	if !ok {
-		return nil
-	}
-	return s.prepareKiroCacheEmulationPlanFromProfile(account, group, profile, inputTokens)
-}
-
-func (s *GatewayService) buildKiroResponsesCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
-	plan := s.prepareKiroResponsesCacheEmulationUsage(ctx, account, group, body, model, inputTokens)
-	plan.commit()
-	return plan.result()
-}
-
-func (s *GatewayService) prepareKiroResponsesCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationPlan {
-	NormalizeGroupRuntimeFields(group)
-	if group == nil || !group.EffectiveKiroCacheEmulationEnabled() || account == nil || account.ID <= 0 || len(body) == 0 {
-		return nil
-	}
-	profile, ok := buildKiroResponsesCacheProfile(ctx, body, model, inputTokens)
-	if !ok {
-		return nil
-	}
-	return s.prepareKiroCacheEmulationPlanFromProfile(account, group, profile, inputTokens)
-}
-
-func (s *GatewayService) buildKiroChatCompletionsCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationUsage {
-	plan := s.prepareKiroChatCompletionsCacheEmulationUsage(ctx, account, group, body, model, inputTokens)
-	plan.commit()
-	return plan.result()
-}
-
-func (s *GatewayService) prepareKiroChatCompletionsCacheEmulationUsage(ctx context.Context, account *Account, group *Group, body []byte, model string, inputTokens int) *kiroCacheEmulationPlan {
-	NormalizeGroupRuntimeFields(group)
-	if group == nil || !group.EffectiveKiroCacheEmulationEnabled() || account == nil || account.ID <= 0 || len(body) == 0 {
-		return nil
-	}
-	profile, ok := buildKiroChatCompletionsCacheProfile(ctx, body, model, inputTokens)
-	if !ok {
-		return nil
-	}
-	effectiveInputTokens := inputTokens
-	if effectiveInputTokens <= 0 {
-		effectiveInputTokens = profile.totalInputTokens
-	}
-	return s.prepareKiroCacheEmulationPlanFromProfile(account, group, profile, effectiveInputTokens)
-}
-
-func (s *GatewayService) prepareKiroCacheEmulationPlanFromProfile(account *Account, group *Group, profile *kiroCacheProfile, inputTokens int) *kiroCacheEmulationPlan {
-	if group == nil || account == nil || account.ID <= 0 || profile == nil {
-		return nil
-	}
-	cacheKey := kiroCacheCredentialKey(account)
-	if cacheKey == 0 {
-		return nil
-	}
-	result := globalKiroCacheTracker.compute(cacheKey, profile)
-	if group.EffectiveKiroCacheEmulationMode() == KiroCacheEmulationModeUniform {
-		ratio := group.EffectiveKiroCacheEmulationRatio()
-		result.CacheReadInputTokens = scaleKiroCacheTokens(result.CacheReadInputTokens, ratio)
-		result.CacheCreationInputTokens = scaleKiroCacheTokens(result.CacheCreationInputTokens, ratio)
-		result.CacheCreation5mInputTokens = scaleKiroCacheTokens(result.CacheCreation5mInputTokens, ratio)
-		result.CacheCreation1hInputTokens = scaleKiroCacheTokens(result.CacheCreation1hInputTokens, ratio)
-	} else {
-		creationRatio, readRatio := group.EffectiveKiroCacheEmulationRatios()
-		result.CacheReadInputTokens = scaleKiroCacheTokens(result.CacheReadInputTokens, readRatio)
-		result.CacheCreationInputTokens = scaleKiroCacheTokens(result.CacheCreationInputTokens, creationRatio)
-		result.CacheCreation5mInputTokens, result.CacheCreation1hInputTokens = scaleKiroCacheCreationTTLTokens(
-			result.CacheCreation5mInputTokens,
-			result.CacheCreation1hInputTokens,
-			result.CacheCreationInputTokens,
-			creationRatio,
-		)
-	}
-	result.InputTokens = inputTokens - result.CacheReadInputTokens - result.CacheCreationInputTokens
-	if result.InputTokens < 0 {
-		result.InputTokens = 0
-	}
-	if result.CacheReadInputTokens == 0 && result.CacheCreationInputTokens == 0 {
-		result = nil
-	}
-	return &kiroCacheEmulationPlan{usage: result, cacheKey: cacheKey, profile: profile}
-}
-
-func scaleKiroCacheCreationTTLTokens(tokens5m, tokens1h, scaledTotal int, ratio float64) (int, int) {
-	if scaledTotal <= 0 || ratio <= 0 {
-		return 0, 0
-	}
-	if tokens5m <= 0 && tokens1h <= 0 {
-		return 0, 0
-	}
-	if tokens1h <= 0 {
-		return scaledTotal, 0
-	}
-	if tokens5m <= 0 {
-		return 0, scaledTotal
-	}
-	scaled5m := scaleKiroCacheTokens(tokens5m, ratio)
-	if scaled5m > scaledTotal {
-		scaled5m = scaledTotal
-	}
-	scaled1h := scaledTotal - scaled5m
-	return scaled5m, scaled1h
-}
-
-func scaleKiroCacheTokens(tokens int, ratio float64) int {
-	if tokens <= 0 || ratio <= 0 {
-		return 0
-	}
-	if ratio >= 1 {
-		return tokens
-	}
-	return int(math.Round(float64(tokens) * ratio))
+	return nil
 }
 
 type kiroCacheProfile struct {
 	totalInputTokens int
 	minCacheable     int
-	// scaleBreakpointsToInputTokens 决定断点累计值是否归一化到 totalInputTokens 所在的
-	// token 空间，三条协议路径都必须置为 true。
-	//
-	// 两侧计数口径本就不同：断点累计值由 countKiroMessageContentTokens 逐块累加，只统计
-	// text/thinking 正文；而 totalInputTokens 来自 countKiroInputTokensFromPayload，统计
-	// 的是整个 messages 的序列化 JSON，并额外计入每消息 kiroTokensPerMessage、每工具
-	// kiroTokensPerTool。后者天然包含 JSON 结构开销（字段名、role 包装、转义、tool_use 的
-	// id/name），前者对这些一律计 0。
-	//
-	// 因为 InputTokens = totalInputTokens - CacheRead - CacheCreation（见
-	// prepareKiroCacheEmulationPlanFromProfile），不归一化就等于让分子分母各用一套口径，
-	// cache_read 被系统性低估：tool_use / tool_result 密集的 Claude Code 流量里缺口可达
-	// 25%~45%，即使前缀完全命中，cache_read/totalInputTokens 也只能到 55%~75%。
-	//
-	// 归一化后最后一个可缓存断点恰好映射为 totalInputTokens，靠前断点按累计占比等比缩放。
-	// 这依赖「最后一个可缓存断点落在最后一个块上」，三条路径各有保证：
-	//   - responses / chat_completions：applyKiroDefaultBreakpoints 显式在末块放断点。
-	//   - Anthropic 且客户端下发了 cache_control：buildKiroCacheProfileFromBlocks 的消息边界
-	//     断点传播（一旦出现任一 cache_control，其后每个消息末尾都会补断点，而消息块恒排在
-	//     tools/system 之后）。
-	//   - Anthropic 且客户端未下发：buildKiroCacheProfile 的兜底同样走
-	//     applyKiroDefaultBreakpoints。
+	// Normalize canonical block counts to the existing external input-token
+	// estimate, keeping input+cache totals bounded across protocols.
 	scaleBreakpointsToInputTokens bool
 	blocks                        []kiroCacheBlock
 	breakpoints                   []kiroCacheBreakpoint
@@ -861,47 +682,6 @@ func (p *kiroCacheProfile) lastCacheableBreakpoint() *kiroResolvedBreakpoint {
 	return &last
 }
 
-func (t *kiroCacheTracker) compute(cacheKey uint64, profile *kiroCacheProfile) *kiroCacheEmulationUsage {
-	out := &kiroCacheEmulationUsage{}
-	if t == nil || profile == nil || cacheKey == 0 {
-		return out
-	}
-	lastBreakpoint := profile.lastCacheableBreakpoint()
-	if lastBreakpoint == nil {
-		return out
-	}
-	lastBreakpointTokens := profile.cacheTokensForBreakpoint(lastBreakpoint.cumulativeTokens)
-	now := time.Now()
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.pruneLocked(now)
-
-	matchedTokens := 0
-	if accountEntries := t.entries[cacheKey]; accountEntries != nil {
-		breakpoints := profile.cacheableBreakpoints()
-		for i, seen := len(breakpoints)-1, 0; i >= 0 && seen < kiroCachePrefixLookbackLimit; i, seen = i-1, seen+1 {
-			breakpoint := breakpoints[i]
-			candidate := profile.blocks[breakpoint.blockIndex]
-			entry, ok := accountEntries[candidate.prefixFingerprint]
-			if !ok || !entry.expiresAt.After(now) {
-				continue
-			}
-			// 只续期命中的这一条即可：整条前缀链的续期由 commit() → update() 完成，
-			// 它会遍历当前 profile 的全部 cacheableBreakpoints 并推后 expiresAt，而命中点
-			// 之前的断点都属于当前 profile。此处再遍历一遍是冗余的。
-			entry.expiresAt = now.Add(entry.ttl)
-			accountEntries[candidate.prefixFingerprint] = entry
-			matchedTokens = profile.cacheTokensForBreakpoint(breakpoint.cumulativeTokens)
-			break
-		}
-	}
-	newTokens := max(lastBreakpointTokens-matchedTokens, 0)
-	out.CacheReadInputTokens = max(matchedTokens, 0)
-	out.CacheCreationInputTokens = newTokens
-	out.CacheCreation5mInputTokens, out.CacheCreation1hInputTokens = profile.ttlBreakdown(matchedTokens)
-	return out
-}
-
 func (p *kiroCacheProfile) cacheTokensForBreakpoint(cumulativeTokens int) int {
 	if p == nil {
 		return 0
@@ -930,94 +710,6 @@ func (p *kiroCacheProfile) ttlBreakdown(matchedTokens int) (int, int) {
 		return 0, newTokens
 	}
 	return newTokens, 0
-}
-
-func (t *kiroCacheTracker) update(cacheKey uint64, profile *kiroCacheProfile) {
-	if t == nil || profile == nil || cacheKey == 0 {
-		return
-	}
-	now := time.Now()
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.pruneLocked(now)
-	accountEntries := t.entries[cacheKey]
-	if accountEntries == nil {
-		accountEntries = make(map[[32]byte]kiroCacheEntry)
-		t.entries[cacheKey] = accountEntries
-	}
-	for _, breakpoint := range profile.cacheableBreakpoints() {
-		block := profile.blocks[breakpoint.blockIndex]
-		expiresAt := now.Add(breakpoint.ttl)
-		entry, ok := accountEntries[block.prefixFingerprint]
-		if ok {
-			entry.tokens = max(entry.tokens, block.cumulativeTokens)
-			entry.ttl = maxDuration(entry.ttl, breakpoint.ttl)
-			if expiresAt.After(entry.expiresAt) {
-				entry.expiresAt = expiresAt
-			}
-			accountEntries[block.prefixFingerprint] = entry
-			continue
-		}
-		accountEntries[block.prefixFingerprint] = kiroCacheEntry{tokens: block.cumulativeTokens, ttl: breakpoint.ttl, expiresAt: expiresAt}
-	}
-}
-
-func (t *kiroCacheTracker) pruneLocked(now time.Time) {
-	for cacheKey, accountEntries := range t.entries {
-		for fp, entry := range accountEntries {
-			if !entry.expiresAt.After(now) {
-				delete(accountEntries, fp)
-			}
-		}
-		if len(accountEntries) == 0 {
-			delete(t.entries, cacheKey)
-		}
-	}
-}
-
-// kiroCacheCredentialKey 返回模拟缓存 tracker 的一级命名空间键，按账号维度隔离。
-//
-// 这里必须用 account.ID，不能用凭证内容拼接，也不能用 kiropkg.BuildAccountKey：
-//   - refresh_token 会轮转。上游返回非空即覆盖写回（见 pkg/kiro/oauth.go 的 RefreshToken
-//     与 KiroOAuthService.BuildAccountCredentials），刷新窗口 kiroRefreshWindow=15min、
-//     access_token 典型 1h 有效，即每小时至少一次。凭证一旦参与计算，键就随之改变，该账号
-//     已积累的全部前缀指纹一次性作废、退回冷启动，命中率被反复打回。
-//   - client_id_hash / client_id 是「OAuth 客户端应用」标识，同一应用注册被多账号共用，
-//     会大量重复。用它做键（BuildAccountKey 的优先级短路正是先取它）会把不同账号合并进
-//     同一命名空间，产生跨账号误命中：cache_read 按 1/10 价计费而上游实际全价，属少计费，
-//     比冷启动严重得多。
-//
-// account.ID 同时满足三个必要属性：轮转时稳定、账号间唯一、恒定存在。调用方
-// prepareKiroCacheEmulationPlanFromProfile 及三个 prepare 入口均已前置校验 account.ID > 0，
-// 故此处无需兜底分支。
-//
-// 取舍：同一上游账号若被导入成两行 accounts 记录，两者不再共享缓存，会多算一次
-// cache_creation、少算 cache_read——偏保守（多计费），方向上优于误命中导致的少计费。
-func kiroCacheCredentialKey(account *Account) uint64 {
-	if account == nil || account.ID <= 0 {
-		return 0
-	}
-	h := fnv.New64a()
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], uint64(account.ID))
-	_, _ = h.Write(buf[:])
-	return h.Sum64()
-}
-
-func kiroCacheCredentialIdentity(account *Account) string {
-	if account == nil {
-		return ""
-	}
-	parts := make([]string, 0, 8)
-	for _, key := range []string{"client_id_hash", "client_id", "refresh_token", "profile_arn", "kiro_api_key", "kiroApiKey", "api_key"} {
-		if value := strings.TrimSpace(account.GetCredential(key)); value != "" {
-			parts = append(parts, key+":"+value)
-		}
-	}
-	if len(parts) == 0 && account.ID > 0 {
-		parts = append(parts, "account:"+fmt.Sprint(account.ID))
-	}
-	return strings.Join(parts, "|")
 }
 
 // kiroMinimumCacheableTokens 返回「前缀至少多少 token 才值得记进缓存」的阈值。
@@ -1324,4 +1016,20 @@ func (u *kiroCacheEmulationUsage) toKiroUsage() *kiropkg.Usage {
 		CacheCreation5mInputTokens: u.CacheCreation5mInputTokens,
 		CacheCreation1hInputTokens: u.CacheCreation1hInputTokens,
 	}
+}
+
+func kiroCacheCredentialIdentity(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	parts := make([]string, 0, 8)
+	for _, key := range []string{"client_id_hash", "client_id", "refresh_token", "profile_arn", "kiro_api_key", "kiroApiKey", "api_key"} {
+		if value := strings.TrimSpace(account.GetCredential(key)); value != "" {
+			parts = append(parts, key+":"+value)
+		}
+	}
+	if len(parts) == 0 && account.ID > 0 {
+		parts = append(parts, "account:"+fmt.Sprint(account.ID))
+	}
+	return strings.Join(parts, "|")
 }

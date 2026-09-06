@@ -1,0 +1,17 @@
+[
+  "message.content:array",
+  "message.content[].text:string",
+  "message.content[].type:string",
+  "message.content[]:object",
+  "message.id:string",
+  "message.model:string",
+  "message.role:string",
+  "message.stop_reason:string",
+  "message.stop_sequence:null",
+  "message.type:string",
+  "message.usage.cache_read_input_tokens:number",
+  "message.usage.input_tokens:number",
+  "message.usage.output_tokens:number",
+  "message.usage:object",
+  "message:object"
+]
